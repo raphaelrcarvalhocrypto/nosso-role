@@ -19,11 +19,7 @@ export type CoupleInvite = {
 
 export async function getProfileByUserId(userId: string) {
   const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
+  if (error) throw error;
   return data as Profile | null;
 }
 
@@ -34,13 +30,8 @@ async function ensureAppSettingsForCouple(coupleId: string) {
     .eq('couple_id', coupleId)
     .maybeSingle();
 
-  if (settingsError) {
-    throw settingsError;
-  }
-
-  if (appSettings) {
-    return;
-  }
+  if (settingsError) throw settingsError;
+  if (appSettings) return;
 
   const { error: insertSettingsError } = await supabase.from('app_settings').insert({
     couple_id: coupleId,
@@ -51,9 +42,7 @@ async function ensureAppSettingsForCouple(coupleId: string) {
     couple_photo: '',
   });
 
-  if (insertSettingsError) {
-    throw insertSettingsError;
-  }
+  if (insertSettingsError) throw insertSettingsError;
 }
 
 export async function ensureProfileAndSettings(userId: string, email?: string | null) {
@@ -63,24 +52,54 @@ export async function ensureProfileAndSettings(userId: string, email?: string | 
     return existingProfile;
   }
 
-  // Trigger do Supabase pode criar o perfil automaticamente.
-  // Se não encontrou acima, pode estar sendo criado agora.
-  // NÃO criamos casal manualmente — o trigger cuida disso.
-  // Apenas aguardamos um pouco e tentamos buscar novamente.
-  
-  // Pequeno delay para o trigger processar
-  await new Promise(resolve => setTimeout(resolve, 300));
-  
-  // Segunda tentativa de buscar o perfil
+  // Wait a bit for trigger-based profile creation.
+  await new Promise((resolve) => setTimeout(resolve, 300));
   const profileAfterDelay = await getProfileByUserId(userId);
   if (profileAfterDelay) {
     await ensureAppSettingsForCouple(profileAfterDelay.couple_id);
     return profileAfterDelay;
   }
 
-  // Se ainda não existe após delay, algo está errado (trigger não configurado?)
-  // Lançamos erro claro em vez de tentar criar manualmente (evita conflito 409)
-   throw new Error('Perfil não encontrado após login. Verifique se o trigger handle_new_user está configurado no Supabase.');
+  // Fallback manual creation when trigger is missing or delayed.
+  const { data: createdCouple, error: coupleError } = await supabase
+    .from('couples')
+    .insert({})
+    .select('id')
+    .single();
+
+  if (coupleError) throw coupleError;
+
+  const now = new Date().toISOString();
+  const { error: profileError } = await supabase.from('profiles').insert({
+    id: userId,
+    couple_id: createdCouple.id,
+    email: email ?? null,
+    created_at: now,
+    updated_at: now,
+  });
+
+  // If profile already exists due to race/trigger, fetch and continue.
+  if (profileError && profileError.code === '409') {
+    const racedProfile = await getProfileByUserId(userId);
+    if (racedProfile) {
+      await ensureAppSettingsForCouple(racedProfile.couple_id);
+      return racedProfile;
+    }
+  }
+
+  if (profileError) throw profileError;
+
+  await ensureAppSettingsForCouple(createdCouple.id);
+
+  return {
+    id: userId,
+    couple_id: createdCouple.id,
+    email: email ?? null,
+    welcome_seen_at: null,
+    created_at: now,
+    updated_at: now,
+  } as Profile;
+}
 
 function generateInviteCode() {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase();
@@ -92,11 +111,7 @@ export async function getCoupleInvite(coupleId: string) {
     .select('*')
     .eq('couple_id', coupleId)
     .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
+  if (error) throw error;
   return data as CoupleInvite | null;
 }
 
@@ -116,14 +131,10 @@ export async function createOrRotateCoupleInvite(coupleId: string, userId: strin
       { onConflict: 'couple_id' },
     );
 
-    if (!error) {
-      return inviteCode;
-    }
+    if (!error) return inviteCode;
 
     const errorCode = (error as { code?: string }).code;
-    if (errorCode !== '23505') {
-      throw error;
-    }
+    if (errorCode !== '23505') throw error;
     lastError = error;
   }
 
@@ -135,11 +146,7 @@ export async function joinCoupleWithInviteCode(inviteCode: string) {
   const { data, error } = await supabase.rpc('join_couple_with_invite', {
     invite_code_input: normalizedCode,
   });
-
-  if (error) {
-    throw error;
-  }
-
+  if (error) throw error;
   return data as string;
 }
 
@@ -153,7 +160,5 @@ export async function markWelcomeAsSeen(userId: string) {
     })
     .eq('id', userId);
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 }
