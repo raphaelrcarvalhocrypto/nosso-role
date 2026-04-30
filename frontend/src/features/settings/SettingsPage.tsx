@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { supabase } from '@/src/services/supabase/client';
 import {
   createOrRotateCoupleInvite,
@@ -10,7 +10,9 @@ import {
   type Profile,
 } from '@/src/services/supabase/data';
 import { useAuthStore } from '@/src/stores/authStore';
-import { Copy, Plus, RefreshCw, Trash2, Unplug } from 'lucide-react';
+import { Copy, Plus, RefreshCw, Trash2, Unplug, Upload, X } from 'lucide-react';
+
+const COUPLE_PHOTOS_BUCKET = 'couple-photos';
 
 type RelationshipPeriod = {
   start_date: string;
@@ -43,6 +45,7 @@ export default function Settings() {
   const [inviteInput, setInviteInput] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
   const [linkingLoading, setLinkingLoading] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -81,7 +84,7 @@ export default function Settings() {
     loadSettings();
   }, [user]);
 
-  const handleSave = async (e: React.FormEvent) => {
+  const handleSave = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setAlert('');
@@ -206,6 +209,79 @@ export default function Settings() {
     });
   };
 
+  const handlePhotoUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    if (!profile?.couple_id) {
+      setAlert('Perfil do casal nao encontrado para upload.');
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setAlert('Selecione um arquivo de imagem valido.');
+      return;
+    }
+
+    if (file.size > 3_145_728) {
+      setAlert('Imagem muito grande. Use uma foto de ate 3MB.');
+      return;
+    }
+
+    setUploadingPhoto(true);
+    try {
+      const extension = getFileExtension(file.name, file.type);
+      const filePath = `${profile.couple_id}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(COUPLE_PHOTOS_BUCKET)
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: file.type,
+        });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      const { data: publicData } = supabase.storage.from(COUPLE_PHOTOS_BUCKET).getPublicUrl(filePath);
+      if (!publicData.publicUrl) {
+        throw new Error('Falha ao gerar URL publica da imagem.');
+      }
+
+      const oldPath = extractPathFromCouplePhotoUrl(settings.couple_photo);
+      if (oldPath) {
+        await supabase.storage.from(COUPLE_PHOTOS_BUCKET).remove([oldPath]);
+      }
+
+      setSettings({ ...settings, couple_photo: publicData.publicUrl });
+      setAlert('Foto enviada com sucesso. Clique em "Salvar Alteracoes".');
+    } catch (error) {
+      console.error('Erro ao carregar foto', error);
+      setAlert('Nao foi possivel carregar a foto.');
+    } finally {
+      setUploadingPhoto(false);
+      event.target.value = '';
+    }
+  };
+
+  const removePhoto = async () => {
+    try {
+      const oldPath = extractPathFromCouplePhotoUrl(settings.couple_photo);
+      if (oldPath) {
+        await supabase.storage.from(COUPLE_PHOTOS_BUCKET).remove([oldPath]);
+      }
+      setSettings({ ...settings, couple_photo: '' });
+      setAlert('Foto removida. Clique em "Salvar Alteracoes".');
+    } catch (error) {
+      console.error('Erro ao remover foto', error);
+      setAlert('Nao foi possivel remover a foto agora.');
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto animate-in fade-in zoom-in-95 duration-500">
       <header className="mb-8 flex items-center gap-4">
@@ -326,6 +402,43 @@ export default function Settings() {
               onChange={(e) => setSettings({ ...settings, couple_photo: e.target.value })}
               className="w-full px-4 py-3 bg-slate-100 dark:bg-[#0f1115] border border-slate-200 dark:border-white/10 rounded-xl focus:outline-none focus:border-rose-500/50 text-slate-900 dark:text-white transition-all"
             />
+            <div className="mt-3 rounded-xl border border-dashed border-slate-300 dark:border-white/10 p-4 bg-slate-50 dark:bg-white/[0.02]">
+              <p className="text-xs text-slate-500 mb-3">
+                Ou envie uma foto direto do dispositivo (JPG/PNG/WEBP, ate 3MB).
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <label className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-black text-white text-sm font-medium cursor-pointer">
+                  <Upload size={14} />
+                  {uploadingPhoto ? 'Carregando...' : 'Enviar foto'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handlePhotoUpload}
+                    disabled={uploadingPhoto}
+                  />
+                </label>
+                {settings.couple_photo && (
+                  <button
+                    type="button"
+                    onClick={removePhoto}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-sm font-medium"
+                  >
+                    <X size={14} />
+                    Remover foto
+                  </button>
+                )}
+              </div>
+              {settings.couple_photo && (
+                <div className="mt-3">
+                  <img
+                    src={settings.couple_photo}
+                    alt="Preview do casal"
+                    className="w-20 h-20 rounded-full object-cover border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="space-y-4 border-t border-slate-200 dark:border-white/5 pt-6">
@@ -422,4 +535,30 @@ function normalizePeriods(
   }
 
   return [];
+}
+
+function getFileExtension(fileName: string, mimeType: string) {
+  const byName = fileName.split('.').pop()?.toLowerCase();
+  if (byName && byName.length <= 5) {
+    return byName;
+  }
+
+  if (mimeType === 'image/png') return 'png';
+  if (mimeType === 'image/webp') return 'webp';
+  return 'jpg';
+}
+
+function extractPathFromCouplePhotoUrl(photoUrl: string) {
+  if (!photoUrl || !photoUrl.includes(`/object/public/${COUPLE_PHOTOS_BUCKET}/`)) {
+    return null;
+  }
+
+  const marker = `/object/public/${COUPLE_PHOTOS_BUCKET}/`;
+  const markerIndex = photoUrl.indexOf(marker);
+  if (markerIndex < 0) {
+    return null;
+  }
+
+  const path = photoUrl.slice(markerIndex + marker.length);
+  return decodeURIComponent(path);
 }
