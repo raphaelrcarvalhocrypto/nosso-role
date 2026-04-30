@@ -52,52 +52,19 @@ export async function ensureProfileAndSettings(userId: string, email?: string | 
     return existingProfile;
   }
 
-  // Wait a bit for trigger-based profile creation.
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  const profileAfterDelay = await getProfileByUserId(userId);
-  if (profileAfterDelay) {
-    await ensureAppSettingsForCouple(profileAfterDelay.couple_id);
-    return profileAfterDelay;
+  // Create profile through a security-definer RPC to avoid RLS issues.
+  const { data: bootstrappedProfile, error: bootstrapError } = await supabase.rpc('ensure_my_profile');
+  if (bootstrapError) throw bootstrapError;
+
+  const profile = bootstrappedProfile as Profile | null;
+  if (!profile) {
+    throw new Error('Falha ao inicializar perfil do usuario.');
   }
 
-  // Fallback manual creation when trigger is missing or delayed.
-  const { data: createdCouple, error: coupleError } = await supabase
-    .from('couples')
-    .insert({})
-    .select('id')
-    .single();
-
-  if (coupleError) throw coupleError;
-
-  const now = new Date().toISOString();
-  const { error: profileError } = await supabase.from('profiles').insert({
-    id: userId,
-    couple_id: createdCouple.id,
-    email: email ?? null,
-    created_at: now,
-    updated_at: now,
-  });
-
-  // If profile already exists due to race/trigger, fetch and continue.
-  if (profileError && profileError.code === '409') {
-    const racedProfile = await getProfileByUserId(userId);
-    if (racedProfile) {
-      await ensureAppSettingsForCouple(racedProfile.couple_id);
-      return racedProfile;
-    }
-  }
-
-  if (profileError) throw profileError;
-
-  await ensureAppSettingsForCouple(createdCouple.id);
-
+  await ensureAppSettingsForCouple(profile.couple_id);
   return {
-    id: userId,
-    couple_id: createdCouple.id,
-    email: email ?? null,
-    welcome_seen_at: null,
-    created_at: now,
-    updated_at: now,
+    ...profile,
+    email: profile.email ?? email ?? null,
   } as Profile;
 }
 
