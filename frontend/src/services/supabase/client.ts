@@ -41,8 +41,24 @@ export function handleDatabaseError(
   table: string | null,
   user?: AuthUser | null,
 ) {
+  let errorMessage: string;
+  
+  if (error instanceof Error) {
+    errorMessage = error.message;
+  } else if (typeof error === 'object' && error !== null) {
+    if ('message' in error) {
+      errorMessage = (error as any).message;
+    } else if ('msg' in error) {
+      errorMessage = (error as any).msg;
+    } else {
+      errorMessage = JSON.stringify(error);
+    }
+  } else {
+    errorMessage = String(error);
+  }
+  
   const errInfo: DatabaseErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage,
     operationType,
     table,
     authInfo: {
@@ -51,6 +67,6 @@ export function handleDatabaseError(
     },
   };
 
-  console.error('Supabase Error:', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.error('Supabase Error:', JSON.stringify(errInfo, null, 2));
+  throw new Error(errorMessage);
 }
