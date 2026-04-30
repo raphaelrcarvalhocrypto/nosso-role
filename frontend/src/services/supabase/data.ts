@@ -80,62 +80,7 @@ export async function ensureProfileAndSettings(userId: string, email?: string | 
 
   // Se ainda não existe após delay, algo está errado (trigger não configurado?)
   // Lançamos erro claro em vez de tentar criar manualmente (evita conflito 409)
-  throw new Error('Perfil não encontrado após login. Verifique se o trigger handle_new_user está configurado no Supabase.');
-}
-
-  // If the auth trigger exists, it may create the profile with a small delay.
-  let profile = await getProfileByUserId(userId);
-  if (profile) {
-    await ensureAppSettingsForCouple(profile.couple_id);
-    return profile;
-  }
-
-  // Fallback: create manually when profile was not created by trigger yet.
-  const { data: createdCouple, error: coupleError } = await supabase
-    .from('couples')
-    .insert({})
-    .select('id')
-    .single();
-
-  if (coupleError) {
-    throw coupleError;
-  }
-
-  const coupleId = createdCouple.id;
-  const now = new Date().toISOString();
-
-  const { error: profileError } = await supabase.from('profiles').insert({
-    id: userId,
-    couple_id: coupleId,
-    email: email ?? null,
-    created_at: now,
-    updated_at: now,
-  });
-
-  // If profile already exists, fetch it and continue.
-  if (profileError && (profileError as { code?: string }).code === '409') {
-    profile = await getProfileByUserId(userId);
-    if (profile) {
-      await ensureAppSettingsForCouple(profile.couple_id);
-      return profile;
-    }
-    throw profileError;
-  }
-
-  if (profileError) {
-    throw profileError;
-  }
-
-  await ensureAppSettingsForCouple(coupleId);
-
-  return {
-    id: userId,
-    couple_id: coupleId,
-    email: email ?? null,
-    created_at: now,
-    updated_at: now,
-  } as Profile;
-}
+   throw new Error('Perfil não encontrado após login. Verifique se o trigger handle_new_user está configurado no Supabase.');
 
 function generateInviteCode() {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase();
