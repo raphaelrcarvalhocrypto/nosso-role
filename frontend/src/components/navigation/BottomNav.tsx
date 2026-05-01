@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { clsx } from 'clsx';
-import { Target, CalendarHeart, Plane, Sparkles, Settings as SettingsIcon } from 'lucide-react';
+import { useAuthStore } from '@/stores/authStore';
+import { Target, CalendarHeart, Plane, Sparkles, Settings as SettingsIcon, LogOut } from 'lucide-react';
 
 const navItems = [
   { name: 'Home', href: '/dashboard', icon: Target },
@@ -15,6 +17,18 @@ const navItems = [
 
 export default function BottomNav() {
   const pathname = usePathname();
+  const { signOut } = useAuthStore();
+  const [isSigningOut, setIsSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    try {
+      await signOut();
+    } finally {
+      setIsSigningOut(false);
+    }
+  };
 
   return (
     <nav className="flex items-center justify-around px-2 pb-safe pb-4 pt-4 bg-white/80 dark:bg-[#0f1115]/80 backdrop-blur-xl border-t border-slate-200/50 dark:border-white/5">
@@ -41,6 +55,24 @@ export default function BottomNav() {
           </Link>
         );
       })}
+
+      <button
+        type="button"
+        onClick={handleSignOut}
+        disabled={isSigningOut}
+        className={clsx(
+          "flex flex-col items-center justify-center w-16 gap-1 group transition-colors",
+          "text-slate-500 dark:text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 disabled:opacity-60",
+        )}
+        aria-label="Sair da conta"
+      >
+        <div className="p-2 rounded-xl transition-all duration-300">
+          <LogOut className="w-5 h-5" />
+        </div>
+        <span className="text-[10px] font-medium tracking-wide">
+          {isSigningOut ? 'Saindo' : 'Sair'}
+        </span>
+      </button>
     </nav>
   );
 }
