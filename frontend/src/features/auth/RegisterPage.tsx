@@ -3,28 +3,34 @@
 import { useState } from 'react';
 import { supabase } from '@/services/supabase/client';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 
 export default function Register() {
-  const router = useRouter();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleRegister = async (e: React.MouseEvent) => {
+  const handleRegister = async (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
       const redirectTo = `${window.location.origin}/dashboard`;
-      const { error: authError } = await supabase.auth.signInWithOAuth({
+      const { data, error: authError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo },
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+        },
       });
       if (authError) {
         throw authError;
       }
-      router.push('/dashboard');
+
+      if (!data?.url) {
+        throw new Error('Falha ao iniciar cadastro com Google.');
+      }
+
+      window.location.assign(data.url);
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Erro ao criar conta com o Google.');
@@ -57,6 +63,7 @@ export default function Register() {
         )}
 
         <button
+          type="button"
           onClick={handleRegister}
           disabled={loading}
           className="w-full bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-white py-4 rounded-xl font-medium shadow-md transition-all active:scale-[0.98] disabled:opacity-70 flex justify-center items-center gap-3 border border-slate-200 dark:border-white/10"
