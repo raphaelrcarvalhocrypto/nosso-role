@@ -6,9 +6,7 @@ interface CustomJWTPayload extends JWTPayload {
   sub?: string;
   email?: string;
   role?: string;
-  coupl
-
-e_id?: string;
+  couple_id?: string;
 }
 
 // Função para obter a chave secreta do JWT
