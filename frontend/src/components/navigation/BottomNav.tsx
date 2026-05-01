@@ -39,7 +39,7 @@ export default function BottomNav() {
             key={item.href}
             href={item.href}
             className={clsx(
-              "flex flex-col items-center justify-center w-16 gap-1 group transition-colors",
+              "flex-1 min-w-0 flex flex-col items-center justify-center gap-1 px-1 group transition-colors",
               isActive ? "text-rose-500 dark:text-rose-400" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             )}
           >
@@ -49,7 +49,7 @@ export default function BottomNav() {
             )}>
               <item.icon className="w-5 h-5" />
             </div>
-            <span className="text-[10px] font-medium tracking-wide">
+            <span className="text-[10px] font-medium tracking-wide truncate">
               {item.name}
             </span>
           </Link>
@@ -61,7 +61,7 @@ export default function BottomNav() {
         onClick={handleSignOut}
         disabled={isSigningOut}
         className={clsx(
-          "flex flex-col items-center justify-center w-16 gap-1 group transition-colors",
+          "flex-1 min-w-0 flex flex-col items-center justify-center gap-1 px-1 group transition-colors",
           "text-slate-500 dark:text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 disabled:opacity-60",
         )}
         aria-label="Sair da conta"
@@ -69,7 +69,7 @@ export default function BottomNav() {
         <div className="p-2 rounded-xl transition-all duration-300">
           <LogOut className="w-5 h-5" />
         </div>
-        <span className="text-[10px] font-medium tracking-wide">
+        <span className="text-[10px] font-medium tracking-wide truncate">
           {isSigningOut ? 'Saindo' : 'Sair'}
         </span>
       </button>
