@@ -5,6 +5,8 @@ import { handleDatabaseError, OperationType, supabase } from "@/services/supabas
 import { ensureProfileAndSettings } from "@/services/supabase/data";
 import { useAuthStore } from "@/stores/authStore";
 import {
+  Bell,
+  BarChart3,
   Calendar,
   CheckSquare,
   Coins,
@@ -38,6 +40,7 @@ type TripChecklistItem = {
 };
 
 type TripExpense = {
+  id: string | null;
   destination_index: string;
   amount: string;
   category: string;
@@ -48,6 +51,7 @@ type TripExpense = {
 };
 
 type TripAlert = {
+  id: string | null;
   destination_index: string;
   title: string;
   alert_at: string;
@@ -74,6 +78,7 @@ type TripLink = {
   title: string;
   url: string;
   category: string;
+  link_status: string;
   destination_index: string;
   notes: string;
   created_by: string | null;
@@ -138,6 +143,8 @@ type TripForm = {
   alerts: TripAlert[];
 };
 
+type TripFormTab = "paradas" | "financeiro" | "roteiro" | "alertas" | "anexos" | "checklist";
+
 const INITIAL_FORM: TripForm = {
   destinations: [createBlankDestination()],
   start_date: "",
@@ -176,6 +183,12 @@ const ITINERARY_CATEGORIES = [
   { value: "outro", label: "Outro" },
 ];
 
+const LINK_STATUS_OPTIONS = [
+  { value: "analisando", label: "Analisando" },
+  { value: "confirmado", label: "Confirmado" },
+  { value: "descartado", label: "Nao fechado" },
+];
+
 const EXPENSE_CATEGORIES = [
   { value: "transporte", label: "Transporte" },
   { value: "hospedagem", label: "Hospedagem" },
@@ -198,6 +211,22 @@ const ALERT_TYPES = [
   { value: "reserva", label: "Reserva" },
   { value: "outro", label: "Outro" },
 ];
+
+const TRIP_STATUS_OPTIONS = [
+  { value: "planejando", label: "Planejando" },
+  { value: "confirmada", label: "Confirmada" },
+  { value: "concluida", label: "Concluida" },
+];
+
+const TRIP_FORM_TABS: Array<{ value: TripFormTab; label: string }> = [
+  { value: "paradas", label: "Paradas" },
+  { value: "financeiro", label: "Plano financeiro" },
+  { value: "roteiro", label: "Roteiro e Links" },
+  { value: "alertas", label: "Alertas" },
+  { value: "anexos", label: "Anexos" },
+  { value: "checklist", label: "Checklist" },
+];
+
 
 const ATTACHMENT_SCOPE_OPTIONS = [
   { value: "trip", label: "Viagem" },
@@ -258,6 +287,7 @@ const createBlankLink = (): TripLink => ({
   title: "",
   url: "",
   category: "hotel",
+  link_status: "analisando",
   destination_index: "general",
   notes: "",
   created_by: null,
@@ -280,6 +310,7 @@ const createBlankItineraryItem = (): TripItineraryItem => ({
 });
 
 const createBlankExpense = (): TripExpense => ({
+  id: null,
   destination_index: "general",
   amount: "",
   category: "outro",
@@ -290,6 +321,7 @@ const createBlankExpense = (): TripExpense => ({
 });
 
 const createBlankAlert = (): TripAlert => ({
+  id: null,
   destination_index: "general",
   title: "",
   alert_at: "",
@@ -321,6 +353,11 @@ function formatCurrencyValue(value: number) {
   return CURRENCY_FORMATTER.format(value);
 }
 
+function formatPercent(value: number) {
+  if (!Number.isFinite(value)) return "0%";
+  return `${Math.round(value)}%`;
+}
+
 function resolveAttachmentMimeType(file: File, extension: string): string | null {
   const rawMime = String(file.type || "").trim().toLowerCase();
   const normalizedMime = ATTACHMENT_MIME_ALIASES[rawMime] ?? rawMime;
@@ -332,6 +369,37 @@ function calculateTotalBudget(coupleBudget: number, individualBudgetPerPerson: n
   const safeCouple = Number.isFinite(coupleBudget) && coupleBudget > 0 ? coupleBudget : 0;
   const safeIndividual = Number.isFinite(individualBudgetPerPerson) && individualBudgetPerPerson > 0 ? individualBudgetPerPerson : 0;
   return safeCouple + safeIndividual * 2;
+}
+
+function calculateProgressPercent(value: number, total: number) {
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.min(100, Math.max(0, (value / total) * 100));
+}
+
+function getExpenseTotal(expenses: TripExpense[]) {
+  return expenses.reduce((acc, expense) => acc + (Number(expense.amount) || 0), 0);
+}
+
+function getExpenseBreakdown(expenses: TripExpense[], key: "category" | "paid_by") {
+  const totals = expenses.reduce<Record<string, number>>((acc, expense) => {
+    const group = String(expense[key] || "outro");
+    acc[group] = (acc[group] ?? 0) + (Number(expense.amount) || 0);
+    return acc;
+  }, {});
+
+  const total = Object.values(totals).reduce((acc, value) => acc + value, 0);
+  return Object.entries(totals)
+    .map(([value, amount]) => ({
+      value,
+      amount,
+      percent: calculateProgressPercent(amount, total),
+    }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+function getLocalDateTimeInputValue(date = new Date()) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 16);
 }
 
 function normalizeSearchText(value: string) {
@@ -405,6 +473,7 @@ function normalizeLinksFromRows(
         title: String(row.title ?? "").trim(),
         url,
         category: String(row.category ?? "outro").trim() || "outro",
+        link_status: String(row.link_status ?? "analisando").trim() || "analisando",
         destination_index: getDestinationIndexFromStopId(
           (row.stop_id as string | null | undefined) ?? null,
           stops,
@@ -455,6 +524,7 @@ function normalizeExpensesFromRows(
       if (!Number.isFinite(amount) || amount <= 0) return null;
       const destinationIndex = normalizeDestinationIndex(row.destination_index);
       return {
+        id: (row.id as string | null | undefined) ?? null,
         destination_index: destinationIndex,
         amount: amount.toFixed(2),
         category: String(row.category ?? "outro").trim() || "outro",
@@ -476,6 +546,7 @@ function normalizeAlertsFromRows(
       const alertAt = String(row.alert_at ?? "").slice(0, 16);
       if (!title || !alertAt) return null;
       return {
+        id: (row.id as string | null | undefined) ?? null,
         destination_index: normalizeDestinationIndex(row.destination_index),
         title,
         alert_at: alertAt,
@@ -569,6 +640,7 @@ function normalizeLinks(raw: unknown): TripLink[] {
           title: String(casted.title ?? "").trim(),
           url,
           category: String(casted.category ?? "outro").trim() || "outro",
+          link_status: String(casted.link_status ?? "analisando").trim() || "analisando",
           destination_index: normalizeDestinationIndex(casted.destination_index),
           notes: String(casted.notes ?? "").trim(),
           created_by: (casted.created_by as string | null | undefined) ?? null,
@@ -597,6 +669,7 @@ function normalizeLinks(raw: unknown): TripLink[] {
       title: "Link util",
       url: text,
       category: "outro",
+      link_status: "analisando",
       destination_index: "general",
       notes: "",
       created_by: null,
@@ -664,6 +737,7 @@ function serializeLinks(links: TripLink[]) {
       title: link.title.trim(),
       url: link.url.trim(),
       category: link.category.trim() || "outro",
+      link_status: link.link_status.trim() || "analisando",
       destination_index: normalizeDestinationIndex(link.destination_index),
       notes: link.notes.trim(),
     }))
@@ -704,6 +778,12 @@ function normalizeExternalUrl(url: string) {
 
 function getCategoryLabel(options: Array<{ value: string; label: string }>, value: string) {
   return options.find((option) => option.value === value)?.label ?? "Outro";
+}
+
+function getLinkStatusClassName(value: string) {
+  if (value === "confirmado") return "text-emerald-700 bg-emerald-500/10 border-emerald-500/30 dark:text-emerald-300";
+  if (value === "descartado") return "text-rose-700 bg-rose-500/10 border-rose-500/30 dark:text-rose-300";
+  return "text-amber-700 bg-amber-500/10 border-amber-500/30 dark:text-amber-300";
 }
 
 function formatTimeRange(start: string, end: string) {
@@ -765,6 +845,7 @@ export default function TripsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingTripId, setEditingTripId] = useState<string | null>(null);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
+  const [activeTripFormTab, setActiveTripFormTab] = useState<TripFormTab>("paradas");
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<TripForm>({ ...INITIAL_FORM });
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
@@ -772,10 +853,18 @@ export default function TripsPage() {
   const [attachmentDestinationIndex, setAttachmentDestinationIndex] = useState("general");
   const [attachmentReferenceIndex, setAttachmentReferenceIndex] = useState("");
   const [attachmentNotes, setAttachmentNotes] = useState("");
+  const [quickExpenseTripId, setQuickExpenseTripId] = useState<string | null>(null);
+  const [quickExpenseForm, setQuickExpenseForm] = useState<TripExpense>({
+    ...createBlankExpense(),
+    spent_at: getLocalDateTimeInputValue(),
+  });
+  const [savingQuickExpense, setSavingQuickExpense] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
 
   const resetTripForm = () => {
     setForm({ ...INITIAL_FORM });
     setEditingTripId(null);
+    setActiveTripFormTab("paradas");
     setAttachmentScopeType("trip");
     setAttachmentDestinationIndex("general");
     setAttachmentReferenceIndex("");
@@ -832,7 +921,7 @@ export default function TripsPage() {
             .order("stop_order", { ascending: true }),
           supabase
             .from("trip_links")
-            .select("id,trip_id,stop_id,sort_order,title,url,category,notes,created_by,created_at,updated_by")
+            .select("id,trip_id,stop_id,sort_order,title,url,category,link_status,notes,created_by,created_at,updated_by")
             .in("trip_id", tripIds)
             .order("trip_id", { ascending: true })
             .order("sort_order", { ascending: true }),
@@ -1127,6 +1216,7 @@ export default function TripsPage() {
           title: link.title.trim() || null,
           url: link.url.trim(),
           category: link.category.trim() || "outro",
+          link_status: link.link_status.trim() || "analisando",
           notes: link.notes.trim() || null,
           destination_index: normalizeDestinationIndex(link.destination_index),
         }))
@@ -1143,6 +1233,7 @@ export default function TripsPage() {
           title: link.title,
           url: link.url,
           category: link.category,
+          link_status: link.link_status,
           notes: link.notes,
         }));
 
@@ -1261,6 +1352,7 @@ export default function TripsPage() {
   const handleEditTrip = (trip: TripRecord) => {
     setEditingTripId(trip.id);
     setSelectedTripId(trip.id);
+    setActiveTripFormTab("paradas");
     const destinations = trip.normalized_stops ?? normalizeDestinations(trip.destinations, trip.destination);
     const legacyNotes = normalizeTripNotes(trip.notes);
     const links = trip.normalized_links ?? normalizeLinks(trip.links);
@@ -1461,6 +1553,59 @@ export default function TripsPage() {
     }));
   };
 
+  const startQuickExpense = (tripId: string) => {
+    setQuickExpenseTripId(tripId);
+    setQuickExpenseForm({
+      ...createBlankExpense(),
+      spent_at: getLocalDateTimeInputValue(),
+    });
+  };
+
+  const updateQuickExpense = (key: keyof TripExpense, value: string) => {
+    setQuickExpenseForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const cancelQuickExpense = () => {
+    setQuickExpenseTripId(null);
+    setQuickExpenseForm({
+      ...createBlankExpense(),
+      spent_at: getLocalDateTimeInputValue(),
+    });
+  };
+
+  const saveQuickExpense = async (tripId: string) => {
+    if (!user) return;
+    const amount = Number(quickExpenseForm.amount) || 0;
+    if (amount <= 0) {
+      setErrorMessage("Informe um valor para adicionar o gasto.");
+      return;
+    }
+
+    try {
+      setSavingQuickExpense(true);
+      setErrorMessage(null);
+      const destinationIndex = normalizeDestinationIndex(quickExpenseForm.destination_index);
+      const { error } = await supabase.from("trip_expenses").insert({
+        trip_id: tripId,
+        destination_index: destinationIndex === "general" ? null : Number(destinationIndex),
+        amount,
+        category: quickExpenseForm.category || "outro",
+        paid_by: quickExpenseForm.paid_by || "casal",
+        spent_at: quickExpenseForm.spent_at || getLocalDateTimeInputValue(),
+        notes: quickExpenseForm.notes.trim() || null,
+      });
+      if (error) throw error;
+
+      cancelQuickExpense();
+      await fetchTrips();
+    } catch (error) {
+      const message = handleDatabaseError(error, OperationType.CREATE, "trip_expenses", user);
+      setErrorMessage(message);
+    } finally {
+      setSavingQuickExpense(false);
+    }
+  };
+
   const updateAlertItem = (index: number, key: keyof TripAlert, value: string) => {
     setForm((prev) => {
       const next = [...prev.alerts];
@@ -1608,6 +1753,49 @@ export default function TripsPage() {
     return memberDirectory[authorId] ?? "parceiro";
   };
 
+  const requestTripNotifications = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setErrorMessage("Este navegador nao suporta notificacoes locais.");
+      return;
+    }
+
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    setNotificationPermission(Notification.permission);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (notificationPermission !== "granted") return;
+
+    const notifyDueAlerts = () => {
+      const now = Date.now();
+      trips.forEach((trip) => {
+        (trip.normalized_alerts ?? []).forEach((alert) => {
+          if (alert.dismissed_at || !alert.alert_at) return;
+          const alertTime = new Date(alert.alert_at).getTime();
+          if (!Number.isFinite(alertTime) || alertTime > now) return;
+
+          const notificationKey = `trip-alert-notified:${alert.id ?? `${trip.id}:${alert.alert_at}:${alert.title}`}`;
+          if (window.localStorage.getItem(notificationKey)) return;
+
+          const title = alert.title || "Alerta da viagem";
+          const body = `${trip.destination || "Viagem"} - ${getCategoryLabel(ALERT_TYPES, alert.alert_type)}`;
+          new Notification(title, { body });
+          window.localStorage.setItem(notificationKey, new Date().toISOString());
+        });
+      });
+    };
+
+    notifyDueAlerts();
+    const interval = window.setInterval(notifyDueAlerts, 60 * 1000);
+    return () => window.clearInterval(interval);
+  }, [notificationPermission, trips]);
+
   const activeTripForMap = useMemo(() => {
     if (!trips.length) return null;
     if (selectedTripId) {
@@ -1660,6 +1848,10 @@ export default function TripsPage() {
     () => getDestinationDateRange(form.destinations, form.start_date, form.end_date),
     [form.destinations, form.start_date, form.end_date],
   );
+  const plannedCoupleBudget = Number(form.couple_budget) || 0;
+  const plannedIndividualBudget = Number(form.individual_budget) || 0;
+  const plannedIndividualTotal = plannedIndividualBudget * 2;
+  const plannedTotalBudget = calculateTotalBudget(plannedCoupleBudget, plannedIndividualBudget);
   const editingTripRecord = useMemo(
     () => (editingTripId ? trips.find((trip) => trip.id === editingTripId) ?? null : null),
     [editingTripId, trips],
@@ -1692,11 +1884,12 @@ export default function TripsPage() {
             const next = !showForm;
             setShowForm(next);
             if (!next) resetTripForm();
+            if (next && !editingTripId) setActiveTripFormTab("paradas");
           }}
           className="flex items-center gap-2 bg-rose-500 hover:bg-rose-400 text-white px-6 py-3 rounded-2xl font-medium transition-all active:scale-95 shadow-lg shadow-rose-500/20"
         >
           <Plus className="w-5 h-5" />
-          {editingTripId ? "Editar Viagem" : "Nova Viagem"}
+          {editingTripId ? "Detalhes da Viagem" : "Nova Viagem"}
         </button>
       </motion.header>
 
@@ -1717,10 +1910,35 @@ export default function TripsPage() {
             exit={{ opacity: 0, y: -12, height: 0 }}
             className="glass p-6 md:p-8 rounded-2xl border border-slate-200/60 dark:border-white/10 overflow-hidden"
           >
-            <h3 className="text-xl font-serif mb-6 text-slate-900 dark:text-white">
-              {editingTripId ? "Editar Viagem" : "Detalhes da Viagem"}
+            <h3 className="text-xl font-serif mb-4 text-slate-900 dark:text-white">
+              {editingTripId ? "Detalhes da Viagem" : "Nova Viagem"}
             </h3>
+            <div className="mb-6 -mx-1 overflow-x-auto pb-1">
+              <div className="flex min-w-max gap-2 px-1" role="tablist" aria-label="Secoes do planejamento da viagem">
+                {TRIP_FORM_TABS.map((tab) => {
+                  const selected = activeTripFormTab === tab.value;
+                  return (
+                    <button
+                      key={tab.value}
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      onClick={() => setActiveTripFormTab(tab.value)}
+                      className={`min-h-11 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
+                        selected
+                          ? "bg-rose-500 text-white shadow-lg shadow-rose-500/20"
+                          : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <form onSubmit={handleSubmitTrip} className="space-y-6">
+              {activeTripFormTab === "paradas" && (
+              <div className="space-y-6">
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 font-bold">
@@ -1836,71 +2054,100 @@ export default function TripsPage() {
                     onChange={(e) => setForm({ ...form, status: e.target.value })}
                     className="w-full bg-slate-100 dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-rose-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
                   >
-                    <option value="planejando">planejando</option>
-                    <option value="confirmada">confirmada</option>
-                    <option value="concluida">concluida</option>
+                    {TRIP_STATUS_OPTIONS.map((status) => (
+                      <option key={status.value} value={status.value}>
+                        {status.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
+              </div>
+              )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                <div>
-                  <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">Orcamento casal</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="R$ 0,00"
-                    value={formatCurrencyInput(form.couple_budget)}
-                    onChange={(e) => setForm({ ...form, couple_budget: parseCurrencyInput(e.target.value) })}
-                    className="w-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                  />
+              {activeTripFormTab === "financeiro" && (
+              <div className="space-y-6">
+              <div className="rounded-2xl border border-emerald-500/15 bg-emerald-500/5 p-4 space-y-4">
+                <div className="flex items-center gap-2">
+                  <Wallet className="w-5 h-5 text-emerald-500" />
+                  <div>
+                    <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 block font-bold">
+                      Plano financeiro
+                    </label>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      Separe o que e gasto do casal e o que cada pessoa precisa reservar individualmente.
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">
-                    Orcamento individual (por pessoa)
-                  </label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="R$ 0,00"
-                    value={formatCurrencyInput(form.individual_budget)}
-                    onChange={(e) => setForm({ ...form, individual_budget: parseCurrencyInput(e.target.value) })}
-                    className="w-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                  />
+
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_260px] gap-3">
+                  <div>
+                    <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">Orcamento casal</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="R$ 0,00"
+                      value={formatCurrencyInput(form.couple_budget)}
+                      onChange={(e) => setForm({ ...form, couple_budget: parseCurrencyInput(e.target.value) })}
+                      className="w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">
+                      Orcamento individual
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="R$ 0,00 por pessoa"
+                      value={formatCurrencyInput(form.individual_budget)}
+                      onChange={(e) => setForm({ ...form, individual_budget: parseCurrencyInput(e.target.value) })}
+                      className="w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                    />
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      {formatCurrencyValue(plannedIndividualBudget)} x 2 = {formatCurrencyValue(plannedIndividualTotal)}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-emerald-500/20 bg-white/80 dark:bg-white/[0.06] p-4">
+                    <span className="text-xs uppercase tracking-widest text-emerald-700 dark:text-emerald-300 font-bold">
+                      Total planejado
+                    </span>
+                    <strong className="block text-2xl font-serif text-slate-900 dark:text-white mt-2">
+                      {formatCurrencyValue(plannedTotalBudget)}
+                    </strong>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">Orcamento total calculado</label>
-                  <input
-                    type="text"
-                    value={formatCurrencyValue(calculateTotalBudget(Number(form.couple_budget) || 0, Number(form.individual_budget) || 0))}
-                    readOnly
-                    className="w-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-amber-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">Media por dia</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="R$ 0,00"
-                    value={formatCurrencyInput(form.daily_budget)}
-                    onChange={(e) => setForm({ ...form, daily_budget: parseCurrencyInput(e.target.value) })}
-                    className="w-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-amber-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">Media refeicao</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="R$ 0,00"
-                    value={formatCurrencyInput(form.meal_budget)}
-                    onChange={(e) => setForm({ ...form, meal_budget: parseCurrencyInput(e.target.value) })}
-                    className="w-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-rose-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                  />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">Limite por dia</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="R$ 0,00"
+                      value={formatCurrencyInput(form.daily_budget)}
+                      onChange={(e) => setForm({ ...form, daily_budget: parseCurrencyInput(e.target.value) })}
+                      className="w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-amber-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">Limite por refeicao</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="R$ 0,00"
+                      value={formatCurrencyInput(form.meal_budget)}
+                      onChange={(e) => setForm({ ...form, meal_budget: parseCurrencyInput(e.target.value) })}
+                      className="w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-rose-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                    />
+                  </div>
                 </div>
               </div>
 
+              </div>
+              )}
+
+              {activeTripFormTab === "roteiro" && (
               <div>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                   <div>
@@ -1926,7 +2173,7 @@ export default function TripsPage() {
                     </div>
                   )}
                   {form.links.map((link, index) => (
-                    <div key={`trip-link-${index}`} className="grid grid-cols-1 lg:grid-cols-[180px_160px_1fr_1fr_auto] gap-2 rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] p-3">
+                    <div key={`trip-link-${index}`} className="grid grid-cols-1 lg:grid-cols-[180px_150px_150px_1fr_1fr_auto] gap-2 rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] p-3">
                       <select
                         value={link.destination_index}
                         onChange={(e) => updateLink(index, "destination_index", e.target.value)}
@@ -1948,6 +2195,17 @@ export default function TripsPage() {
                         {LINK_CATEGORIES.map((category) => (
                           <option key={category.value} value={category.value}>
                             {category.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={link.link_status}
+                        onChange={(e) => updateLink(index, "link_status", e.target.value)}
+                        className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-blue-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                      >
+                        {LINK_STATUS_OPTIONS.map((status) => (
+                          <option key={status.value} value={status.value}>
+                            {status.label}
                           </option>
                         ))}
                       </select>
@@ -1978,13 +2236,15 @@ export default function TripsPage() {
                         value={link.notes}
                         onChange={(e) => updateLink(index, "notes", e.target.value)}
                         placeholder="Observacao opcional (ex: comparar preco, horarios, bagagem...)"
-                        className="lg:col-span-5 min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-blue-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                        className="lg:col-span-6 min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-blue-500/50 transition-colors text-slate-900 dark:text-slate-100"
                       />
                     </div>
                   ))}
                 </div>
               </div>
+              )}
 
+              {activeTripFormTab === "checklist" && (
               <div>
                 <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 mb-1 block font-bold">Notas</label>
                 <textarea
@@ -1994,7 +2254,9 @@ export default function TripsPage() {
                   className="w-full h-24 resize-none bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-rose-500/50 transition-colors text-slate-900 dark:text-slate-100"
                 />
               </div>
+              )}
 
+              {activeTripFormTab === "roteiro" && (
               <div>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                   <div>
@@ -2099,7 +2361,9 @@ export default function TripsPage() {
                   ))}
                 </div>
               </div>
+              )}
 
+              {activeTripFormTab === "financeiro" && (
               <div>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                   <div>
@@ -2197,6 +2461,9 @@ export default function TripsPage() {
                 </div>
               </div>
 
+              )}
+
+              {activeTripFormTab === "alertas" && (
               <div>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                   <div>
@@ -2279,7 +2546,9 @@ export default function TripsPage() {
                   ))}
                 </div>
               </div>
+              )}
 
+              {activeTripFormTab === "anexos" && (
               <div>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                   <div>
@@ -2391,7 +2660,9 @@ export default function TripsPage() {
                   </div>
                 )}
               </div>
+              )}
 
+              {activeTripFormTab === "checklist" && (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 font-bold">Checklist</label>
@@ -2435,6 +2706,7 @@ export default function TripsPage() {
                   ))}
                 </div>
               </div>
+              )}
 
               <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
                 {editingTripId && (
@@ -2493,14 +2765,19 @@ export default function TripsPage() {
               const attachments = trip.normalized_attachments ?? [];
               const generalLinks = getGeneralItems(links);
               const generalItinerary = getGeneralItems(itinerary);
-              const totalSpent = expenses.reduce((acc, item) => acc + (Number(item.amount) || 0), 0);
+              const totalSpent = getExpenseTotal(expenses);
               const pendingAlerts = alerts.filter((item) => !item.dismissed_at).length;
+              const overdueAlerts = alerts.filter((item) => !item.dismissed_at && item.alert_at && new Date(item.alert_at).getTime() <= Date.now());
               const coupleBudget = Number(trip.couple_budget) || 0;
               const individualBudget = Number(trip.individual_budget) || 0;
               const calculatedTotalBudget =
                 coupleBudget > 0 || individualBudget > 0
                   ? calculateTotalBudget(coupleBudget, individualBudget)
                   : Number(trip.estimated_budget) || 0;
+              const budgetUsagePercent = calculateProgressPercent(totalSpent, calculatedTotalBudget);
+              const categoryBreakdown = getExpenseBreakdown(expenses, "category");
+              const paidByBreakdown = getExpenseBreakdown(expenses, "paid_by");
+              const isQuickExpenseOpen = quickExpenseTripId === trip.id;
               const hasStopDetails = destinations.some(
                 (destination, index) =>
                   destination.arrival_date ||
@@ -2568,6 +2845,9 @@ export default function TripsPage() {
                                           <span className="text-[10px] uppercase tracking-widest text-blue-500">
                                             {getCategoryLabel(LINK_CATEGORIES, link.category)}
                                           </span>
+                                          <span className={`text-[10px] uppercase tracking-widest border rounded-full px-2 py-0.5 ${getLinkStatusClassName(link.link_status)}`}>
+                                            {getCategoryLabel(LINK_STATUS_OPTIONS, link.link_status)}
+                                          </span>
                                           <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                                         </span>
                                         <span className="block font-medium break-words mt-1">{link.title || link.url}</span>
@@ -2615,38 +2895,209 @@ export default function TripsPage() {
                       </div>
                     )}
 
-                    {(coupleBudget > 0 || individualBudget > 0 || Number(trip.estimated_budget) > 0) && (
-                      <div className="flex items-center gap-2">
-                        <Wallet className="w-4 h-4 text-emerald-500" />
-                        Orcamento total: <strong className="text-slate-800 dark:text-white">{formatCurrencyValue(calculatedTotalBudget)}</strong>
-                      </div>
-                    )}
+                    {(calculatedTotalBudget > 0 || expenses.length > 0) && (
+                      <div className="pt-3 border-t border-slate-200/50 dark:border-white/5 mt-3">
+                        <div className="rounded-2xl border border-emerald-500/15 bg-emerald-500/5 p-4 space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                            <div>
+                              <div className="flex items-center gap-2 text-slate-800 dark:text-slate-100 font-medium">
+                                <BarChart3 className="w-4 h-4 text-emerald-500" />
+                                Orcamento
+                              </div>
+                              <p className="text-sm text-slate-600 dark:text-slate-300 mt-2">
+                                <strong>{formatCurrencyValue(totalSpent)}</strong> gastos de{" "}
+                                <strong>{formatCurrencyValue(calculatedTotalBudget)}</strong> planejados
+                              </p>
+                            </div>
+                            <span
+                              className={`text-xs px-3 py-1 rounded-full border font-medium ${
+                                calculatedTotalBudget > 0 && totalSpent > calculatedTotalBudget
+                                  ? "border-rose-500/30 text-rose-700 dark:text-rose-300 bg-rose-500/10"
+                                  : "border-emerald-500/30 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10"
+                              }`}
+                            >
+                              {calculatedTotalBudget > 0 ? formatPercent((totalSpent / calculatedTotalBudget) * 100) : "sem meta"}
+                            </span>
+                          </div>
 
-                    {coupleBudget > 0 && (
-                      <div className="flex items-center gap-2">
-                        <Wallet className="w-4 h-4 text-emerald-400" />
-                        Orcamento casal: <strong>{formatCurrencyValue(coupleBudget)}</strong>
-                      </div>
-                    )}
+                          <div className="h-3 rounded-full bg-slate-200 dark:bg-white/10 overflow-hidden" aria-label="Progresso de gastos da viagem">
+                            <div
+                              className={`h-full rounded-full ${totalSpent > calculatedTotalBudget && calculatedTotalBudget > 0 ? "bg-rose-500" : "bg-emerald-500"}`}
+                              style={{ width: `${budgetUsagePercent}%` }}
+                            />
+                          </div>
 
-                    {individualBudget > 0 && (
-                      <div className="flex items-center gap-2">
-                        <Wallet className="w-4 h-4 text-teal-500" />
-                        Orcamento individual (por pessoa): <strong>{formatCurrencyValue(individualBudget)}</strong>
-                      </div>
-                    )}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                            {coupleBudget > 0 && (
+                              <div className="rounded-xl bg-white/80 dark:bg-white/[0.05] border border-slate-200 dark:border-white/10 p-3">
+                                <span className="text-slate-500 dark:text-slate-400">Casal</span>
+                                <strong className="block text-slate-800 dark:text-white mt-1">{formatCurrencyValue(coupleBudget)}</strong>
+                              </div>
+                            )}
+                            {individualBudget > 0 && (
+                              <div className="rounded-xl bg-white/80 dark:bg-white/[0.05] border border-slate-200 dark:border-white/10 p-3">
+                                <span className="text-slate-500 dark:text-slate-400">Individual por pessoa</span>
+                                <strong className="block text-slate-800 dark:text-white mt-1">{formatCurrencyValue(individualBudget)}</strong>
+                              </div>
+                            )}
+                            {Number(trip.daily_budget) > 0 && (
+                              <div className="rounded-xl bg-white/80 dark:bg-white/[0.05] border border-slate-200 dark:border-white/10 p-3">
+                                <span className="text-slate-500 dark:text-slate-400">Limite por dia</span>
+                                <strong className="block text-slate-800 dark:text-white mt-1">{formatCurrencyValue(Number(trip.daily_budget))}</strong>
+                              </div>
+                            )}
+                            {Number(trip.meal_budget) > 0 && (
+                              <div className="rounded-xl bg-white/80 dark:bg-white/[0.05] border border-slate-200 dark:border-white/10 p-3">
+                                <span className="text-slate-500 dark:text-slate-400">Limite refeicao</span>
+                                <strong className="block text-slate-800 dark:text-white mt-1">{formatCurrencyValue(Number(trip.meal_budget))}</strong>
+                              </div>
+                            )}
+                          </div>
 
-                    {expenses.length > 0 && (
-                      <div className="flex items-center gap-2">
-                        <Coins className="w-4 h-4 text-orange-500" />
-                        Gasto real total: <strong>{formatCurrencyValue(totalSpent)}</strong>
+                          {categoryBreakdown.length > 0 && (
+                            <div className="space-y-2">
+                              <p className="text-xs uppercase tracking-widest text-slate-500 dark:text-slate-400 font-bold">Por categoria</p>
+                              {categoryBreakdown.map((item) => (
+                                <div key={`${trip.id}-category-${item.value}`} className="space-y-1">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-xs text-slate-600 dark:text-slate-300">{getCategoryLabel(EXPENSE_CATEGORIES, item.value)}</span>
+                                    <span className="text-xs font-medium text-slate-700 dark:text-slate-200">{formatCurrencyValue(item.amount)}</span>
+                                  </div>
+                                  <div className="h-2 rounded-full bg-slate-200 dark:bg-white/10 overflow-hidden">
+                                    <div className="h-full rounded-full bg-amber-500" style={{ width: `${item.percent}%` }} />
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {paidByBreakdown.length > 0 && (
+                            <div className="space-y-2">
+                              <p className="text-xs uppercase tracking-widest text-slate-500 dark:text-slate-400 font-bold">Quem pagou</p>
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                {paidByBreakdown.map((item) => (
+                                  <div key={`${trip.id}-paid-${item.value}`} className="rounded-xl bg-white/80 dark:bg-white/[0.05] border border-slate-200 dark:border-white/10 p-3">
+                                    <span className="text-xs text-slate-500 dark:text-slate-400">{getCategoryLabel(PAID_BY_OPTIONS, item.value)}</span>
+                                    <strong className="block text-sm text-slate-800 dark:text-white mt-1">{formatCurrencyValue(item.amount)}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {isQuickExpenseOpen ? (
+                            <div className="rounded-2xl border border-amber-500/20 bg-white/80 dark:bg-white/[0.04] p-3 space-y-2">
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[160px_140px_140px_1fr] gap-2">
+                                <select
+                                  value={quickExpenseForm.destination_index}
+                                  onChange={(e) => updateQuickExpense("destination_index", e.target.value)}
+                                  className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-amber-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                                >
+                                  <option value="general">Geral</option>
+                                  {destinations.map((destination, destinationIndex) => (
+                                    <option key={`quick-expense-destination-${trip.id}-${destinationIndex}`} value={String(destinationIndex)}>
+                                      {getDestinationOptionLabel(destinations, String(destinationIndex))}
+                                    </option>
+                                  ))}
+                                </select>
+                                <select
+                                  value={quickExpenseForm.category}
+                                  onChange={(e) => updateQuickExpense("category", e.target.value)}
+                                  className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-amber-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                                >
+                                  {EXPENSE_CATEGORIES.map((category) => (
+                                    <option key={category.value} value={category.value}>
+                                      {category.label}
+                                    </option>
+                                  ))}
+                                </select>
+                                <select
+                                  value={quickExpenseForm.paid_by}
+                                  onChange={(e) => updateQuickExpense("paid_by", e.target.value)}
+                                  className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-amber-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                                >
+                                  {PAID_BY_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={formatCurrencyInput(quickExpenseForm.amount)}
+                                  onChange={(e) => updateQuickExpense("amount", parseCurrencyInput(e.target.value))}
+                                  placeholder="Valor gasto"
+                                  className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-amber-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                                />
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-2">
+                                <input
+                                  type="datetime-local"
+                                  value={quickExpenseForm.spent_at}
+                                  onChange={(e) => updateQuickExpense("spent_at", e.target.value)}
+                                  className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-amber-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                                />
+                                <input
+                                  type="text"
+                                  value={quickExpenseForm.notes}
+                                  onChange={(e) => updateQuickExpense("notes", e.target.value)}
+                                  placeholder="Observacao"
+                                  className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-amber-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                                />
+                              </div>
+                              <div className="flex flex-wrap justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={cancelQuickExpense}
+                                  className="min-h-11 px-3 rounded-xl bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-200 text-sm"
+                                >
+                                  Cancelar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => saveQuickExpense(trip.id)}
+                                  disabled={savingQuickExpense}
+                                  className="min-h-11 px-3 rounded-xl bg-amber-500 text-white text-sm disabled:opacity-60"
+                                >
+                                  {savingQuickExpense ? "Salvando..." : "Salvar gasto"}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => startQuickExpense(trip.id)}
+                              className="min-h-11 inline-flex items-center gap-2 px-3 rounded-xl bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 text-sm font-medium"
+                            >
+                              <Plus className="w-4 h-4" />
+                              Adicionar gasto
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
 
                     {alerts.length > 0 && (
-                      <div className="flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-violet-500" />
-                        Alertas: <strong>{pendingAlerts} pendentes</strong>
+                      <div className="pt-3 border-t border-slate-200/50 dark:border-white/5 mt-3">
+                        <div className="rounded-2xl border border-violet-500/15 bg-violet-500/5 p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <Bell className="w-4 h-4 text-violet-500" />
+                            <span>
+                              Alertas: <strong>{pendingAlerts} pendentes</strong>
+                              {overdueAlerts.length > 0 && <strong className="text-rose-600 dark:text-rose-300"> - {overdueAlerts.length} vencidos</strong>}
+                            </span>
+                          </div>
+                          {notificationPermission !== "granted" && (
+                            <button
+                              type="button"
+                              onClick={requestTripNotifications}
+                              className="min-h-11 px-3 rounded-xl bg-violet-100 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300 text-sm font-medium"
+                            >
+                              Ativar notificacoes
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
 
@@ -2654,20 +3105,6 @@ export default function TripsPage() {
                       <div className="flex items-center gap-2">
                         <ExternalLink className="w-4 h-4 text-cyan-500" />
                         Anexos: <strong>{attachments.length}</strong>
-                      </div>
-                    )}
-
-                    {Number(trip.daily_budget) > 0 && (
-                      <div className="flex items-center gap-2">
-                        <Coins className="w-4 h-4 text-amber-500" />
-                        Media diaria: <strong>{formatCurrencyValue(Number(trip.daily_budget))}</strong>
-                      </div>
-                    )}
-
-                    {Number(trip.meal_budget) > 0 && (
-                      <div className="flex items-center gap-2">
-                        <Wallet className="w-4 h-4 text-rose-400" />
-                        Media refeicao: <strong>{formatCurrencyValue(Number(trip.meal_budget))}</strong>
                       </div>
                     )}
 
@@ -2689,6 +3126,9 @@ export default function TripsPage() {
                               <span className="flex items-center justify-between gap-2">
                                 <span className="text-[10px] uppercase tracking-widest text-blue-500">
                                   {getCategoryLabel(LINK_CATEGORIES, link.category)}
+                                </span>
+                                <span className={`text-[10px] uppercase tracking-widest border rounded-full px-2 py-0.5 ${getLinkStatusClassName(link.link_status)}`}>
+                                  {getCategoryLabel(LINK_STATUS_OPTIONS, link.link_status)}
                                 </span>
                                 <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                               </span>

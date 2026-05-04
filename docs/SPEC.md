@@ -151,7 +151,7 @@ type Trip = {
   meal_budget?: number;
   links?: string; // legado
   notes?: string; // legado
-  status: 'planejando' | 'confirmada' | 'concluida' | string;
+  status: 'planejando' | 'confirmada' | 'concluida'; // public.trip_status
   created_at: string;
 };
 ```
@@ -184,6 +184,7 @@ type TripLink = {
   sort_order: number;
   title?: string | null;
   url: string;
+  link_status: 'analisando' | 'confirmado' | 'descartado';
   category: 'hotel' | 'transporte' | 'passeio' | 'passagem' | 'restaurante' | 'documento' | 'outro' | string;
   notes?: string | null;
   created_by?: string | null;
@@ -242,6 +243,8 @@ type TripAlert = {
 };
 ```
 
+Observacao: alertas disparam notificacoes locais do navegador enquanto o app esta aberto e com permissao concedida. Push em background exige service worker e/ou funcao agendada no Supabase/Vercel.
+
 ### `trip_attachments/{attachmentId}`
 
 ```ts
@@ -297,6 +300,7 @@ type SurpriseMessage = {
 - `app_settings` so aceita leitura/escrita para o mesmo `couple_id` do perfil autenticado.
 - `trip_*` usa auditoria (`created_by`, `updated_by`) preenchida por trigger `set_audit_fields`.
 - Bucket `trip-attachments` e privado, com policy por `couple_id/trip_id`, whitelist de MIME e limite de tamanho.
+- `trips.status` usa enum `public.trip_status` para impedir divergencia de valores.
 
 Melhoria recomendada: adicionar testes automatizados das policies RLS antes de evoluir colaboracao entre duas contas.
 

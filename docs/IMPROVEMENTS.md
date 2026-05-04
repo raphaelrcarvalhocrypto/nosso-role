@@ -35,6 +35,10 @@ Consolidar o SaaS para casal com foco em:
 - [x] Trips com planejamento modular por parada (links categorizados e roteiro por destino/data).
 - [x] Trips com anexos por escopo (viagem/parada/link/roteiro) e visualizacao segura via URL assinada.
 - [x] Trips com orcamento separado em casal + individual por pessoa.
+- [x] Trips com resumo de gastos vs. orcamento, breakdown por categoria e gasto inline.
+- [x] Trips com notificacoes locais para alertas enquanto o app esta aberto.
+- [x] Trips com status controlado por enum no Supabase.
+- [x] Links de viagem dentro de roteiro com status de decisao (analisando, confirmado, nao fechado).
 - [ ] Revisar UX de auth para evitar redirects redundantes.
 
 ### P2 - Medio (Arquitetura e Manutencao)

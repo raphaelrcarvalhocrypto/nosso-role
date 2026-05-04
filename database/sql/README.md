@@ -20,6 +20,8 @@ Scripts atuais:
 - `015_trips_budget_split.sql`
 - `016_trip_ops_upgrades.sql`
 - `017_trip_attachments_security_hardening.sql`
+- `018_trips_status_enum.sql`
+- `019_trip_links_status.sql`
 
 Resumo das migrations de viagens (fase atual):
 - `014_trip_planning_normalization.sql`
@@ -34,9 +36,16 @@ Resumo das migrations de viagens (fase atual):
 - `017_trip_attachments_security_hardening.sql`
   - Hardening adicional de anexos para ambientes onde a `016` ja foi executada.
   - Reforca constraints, trigger de path imutavel/casal+trip, e policy de insert no storage.
+- `018_trips_status_enum.sql`
+  - Cria `public.trip_status` e converte `trips.status` para enum.
+  - Normaliza valores fora do padrao para `planejando`.
+- `019_trip_links_status.sql`
+  - Adiciona `trip_links.link_status` com default `analisando`.
+  - Restringe status para `analisando`, `confirmado` ou `descartado`.
 
 Status desta rodada (2026-05-04):
-- `014`, `015`, `016` e `017` executadas.
+- `014`, `015`, `016`, `017` e `018` executadas.
+- `019` pendente de execucao.
 
 Padrao recomendado:
 
