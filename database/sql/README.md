@@ -16,6 +16,27 @@ Scripts atuais:
 - `011_enhanced_rls_policies.sql`
 - `012_dates_time_fields.sql`
 - `013_dates_location_coordinates.sql`
+- `014_trip_planning_normalization.sql`
+- `015_trips_budget_split.sql`
+- `016_trip_ops_upgrades.sql`
+- `017_trip_attachments_security_hardening.sql`
+
+Resumo das migrations de viagens (fase atual):
+- `014_trip_planning_normalization.sql`
+  - Cria `trip_stops`, `trip_links`, `trip_itinerary_items`.
+  - Ativa RLS por casal, auditoria (`created_by`/`updated_by`) e backfill do legado de `trips`.
+- `015_trips_budget_split.sql`
+  - Adiciona `couple_budget` e `individual_budget` em `trips`.
+  - Mantem `estimated_budget` para compatibilidade.
+- `016_trip_ops_upgrades.sql`
+  - Adiciona `trip_expenses`, `trip_alerts`, `trip_attachments`.
+  - Cria bucket privado `trip-attachments` e policies de storage.
+- `017_trip_attachments_security_hardening.sql`
+  - Hardening adicional de anexos para ambientes onde a `016` ja foi executada.
+  - Reforca constraints, trigger de path imutavel/casal+trip, e policy de insert no storage.
+
+Status desta rodada (2026-05-04):
+- `014`, `015`, `016` e `017` executadas.
 
 Padrao recomendado:
 

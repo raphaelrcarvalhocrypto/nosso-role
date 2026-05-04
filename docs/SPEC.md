@@ -141,15 +141,122 @@ type DateIdea = {
 type Trip = {
   couple_id: string;
   destination: string;
+  destinations?: unknown; // legado, preservado por compatibilidade
   start_date: string;
   end_date: string;
   estimated_budget?: number;
+  couple_budget?: number;
+  individual_budget?: number; // valor por pessoa
   daily_budget?: number;
   meal_budget?: number;
-  links?: string;
-  notes?: string;
+  links?: string; // legado
+  notes?: string; // legado
   status: 'planejando' | 'confirmada' | 'concluida' | string;
   created_at: string;
+};
+```
+
+### `trip_stops/{stopId}`
+
+```ts
+type TripStop = {
+  trip_id: string;
+  stop_order: number;
+  name: string;
+  arrival_date?: string | null;
+  arrival_time?: string | null;
+  departure_date?: string | null;
+  departure_time?: string | null;
+  notes?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  created_by?: string | null;
+  updated_by?: string | null;
+};
+```
+
+### `trip_links/{linkId}`
+
+```ts
+type TripLink = {
+  trip_id: string;
+  stop_id?: string | null;
+  sort_order: number;
+  title?: string | null;
+  url: string;
+  category: 'hotel' | 'transporte' | 'passeio' | 'passagem' | 'restaurante' | 'documento' | 'outro' | string;
+  notes?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
+};
+```
+
+### `trip_itinerary_items/{itemId}`
+
+```ts
+type TripItineraryItem = {
+  trip_id: string;
+  stop_id?: string | null;
+  sort_order: number;
+  event_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  title: string;
+  location?: string | null;
+  category: 'chegada' | 'transporte' | 'passeio' | 'refeicao' | 'hospedagem' | 'livre' | 'outro' | string;
+  notes?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
+};
+```
+
+### `trip_expenses/{expenseId}`
+
+```ts
+type TripExpense = {
+  trip_id: string;
+  destination_index?: number | null;
+  amount: number;
+  category: string;
+  paid_by: 'casal' | 'pessoa_1' | 'pessoa_2';
+  spent_at: string;
+  notes?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
+};
+```
+
+### `trip_alerts/{alertId}`
+
+```ts
+type TripAlert = {
+  trip_id: string;
+  destination_index?: number | null;
+  title: string;
+  alert_at: string;
+  alert_type: string;
+  notes?: string | null;
+  dismissed_at?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
+};
+```
+
+### `trip_attachments/{attachmentId}`
+
+```ts
+type TripAttachment = {
+  trip_id: string;
+  destination_index?: number | null;
+  scope_type: 'trip' | 'stop' | 'link' | 'itinerary';
+  reference_index?: number | null;
+  file_name: string;
+  file_path: string;
+  mime_type?: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp' | 'text/plain' | 'application/zip' | null;
+  size_bytes?: number | null; // max 20 MB
+  notes?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
 };
 ```
 
@@ -188,6 +295,8 @@ type SurpriseMessage = {
 - Tabelas de dominio so podem ser lidas/escritas se `couple_id = get_my_couple_id()`.
 - `surprise_messages` permite delete apenas do autor.
 - `app_settings` so aceita leitura/escrita para o mesmo `couple_id` do perfil autenticado.
+- `trip_*` usa auditoria (`created_by`, `updated_by`) preenchida por trigger `set_audit_fields`.
+- Bucket `trip-attachments` e privado, com policy por `couple_id/trip_id`, whitelist de MIME e limite de tamanho.
 
 Melhoria recomendada: adicionar testes automatizados das policies RLS antes de evoluir colaboracao entre duas contas.
 
@@ -237,7 +346,8 @@ Arquivo de template: `frontend/.env.example`.
 - Usuario nao autenticado nao acessa rotas privadas.
 - Usuario autenticado consegue acessar dashboard apos login.
 - Criar date persiste registro em `dates` com `couple_id`.
-- Criar viagem persiste registro em `trips` com orcamentos numericos.
+- Criar/editar viagem persiste `trips` e blocos normalizados (`trip_stops`, `trip_links`, `trip_itinerary_items`).
+- Orcamento de viagem aceita `couple_budget` e `individual_budget` mantendo `estimated_budget` por compatibilidade.
 - Criar desejo persiste registro em `wishlist_items` e permite marcar como realizado.
 - Criar surpresa persiste registro em `surprise_messages` e oculta conteudo ate `unlock_date`.
 - Atualizar configuracoes persiste nomes, foto e periodos em `app_settings`.

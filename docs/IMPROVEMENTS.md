@@ -32,6 +32,9 @@ Consolidar o SaaS para casal com foco em:
 - [x] Dates com categoria expandida/custom e duracao de 1+ dias.
 - [x] Dates com modal grande, autocomplete de endereco e horario de entrada/saida.
 - [x] Dates exibem marcador no mapa a partir do endereco salvo.
+- [x] Trips com planejamento modular por parada (links categorizados e roteiro por destino/data).
+- [x] Trips com anexos por escopo (viagem/parada/link/roteiro) e visualizacao segura via URL assinada.
+- [x] Trips com orcamento separado em casal + individual por pessoa.
 - [ ] Revisar UX de auth para evitar redirects redundantes.
 
 ### P2 - Medio (Arquitetura e Manutencao)
@@ -42,9 +45,9 @@ Consolidar o SaaS para casal com foco em:
 - [ ] Limpar dependencias nao usadas no `package.json`.
 
 ### P3 - Documentacao
-- [ ] Atualizar PRD/SPEC/README para refletir Supabase 100%.
+- [x] Atualizar PRD/SPEC/README para refletir Supabase 100%.
 - [ ] Remover referencias antigas de Firebase/Firestore.
-- [ ] Registrar runbook de migracoes SQL e rollback.
+- [x] Registrar runbook de migracoes SQL e rollback.
 
 ## Fases de Execucao
 
@@ -76,6 +79,6 @@ Escopo:
 ## Checklist de Fechamento
 - [x] `npm run lint` sem erros.
 - [x] `npm run build` sem bypass de tipos.
-- [ ] SQLs aplicados e validados no Supabase.
+- [x] SQLs aplicados e validados no Supabase.
 - [ ] Teste manual dos fluxos: login, dashboard, dates, trips, wishlist, surpresas, settings.
-- [ ] Documentacao atualizada.
+- [x] Documentacao atualizada.
