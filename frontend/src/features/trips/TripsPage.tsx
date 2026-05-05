@@ -200,12 +200,6 @@ const EXPENSE_CATEGORIES = [
   { value: "outro", label: "Outro" },
 ];
 
-const PAID_BY_OPTIONS = [
-  { value: "casal", label: "Casal" },
-  { value: "pessoa_1", label: "Pessoa 1" },
-  { value: "pessoa_2", label: "Pessoa 2" },
-];
-
 const ALERT_TYPES = [
   { value: "saida", label: "Saida" },
   { value: "checkin", label: "Check-in" },
@@ -409,6 +403,13 @@ function normalizeSearchText(value: string) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+function getLegacyPaidByLabel(value: string, memberOptions: Array<{ value: string; label: string }>) {
+  if (value === "casal") return "Casal";
+  if (value === "pessoa_1") return memberOptions[0]?.label ?? "Pessoa 1";
+  if (value === "pessoa_2") return memberOptions[1]?.label ?? "Pessoa 2";
+  return "Outro";
 }
 
 function normalizeDestinationIndex(value: unknown) {
@@ -848,6 +849,7 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
   const { user } = useAuthStore();
   const [trips, setTrips] = useState<TripRecord[]>([]);
   const [memberDirectory, setMemberDirectory] = useState<Record<string, string>>({});
+  const [coupleNames, setCoupleNames] = useState<{ name_1: string; name_2: string }>({ name_1: "", name_2: "" });
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -869,6 +871,42 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
   const [savingQuickExpense, setSavingQuickExpense] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
 
+  const paidBySelectOptions = useMemo(() => {
+    const name1 = coupleNames.name_1.trim() || "Pessoa 1";
+    const name2 = coupleNames.name_2.trim() || "Pessoa 2";
+    const baseOptions = [
+      { value: "casal", label: "Casal" },
+      { value: "pessoa_1", label: name1 },
+      { value: "pessoa_2", label: name2 },
+    ];
+    const missingValues = new Set<string>();
+
+    for (const expense of form.expenses) {
+      const value = String(expense.paid_by || "").trim();
+      if (value && !baseOptions.some((option) => option.value === value)) {
+        missingValues.add(value);
+      }
+    }
+
+    const quickValue = String(quickExpenseForm.paid_by || "").trim();
+    if (quickValue && !baseOptions.some((option) => option.value === quickValue)) {
+      missingValues.add(quickValue);
+    }
+
+    const legacyOptions = Array.from(missingValues).map((value) => ({
+      value,
+      label: getLegacyPaidByLabel(value, baseOptions.slice(1)),
+    }));
+
+    return [...baseOptions, ...legacyOptions];
+  }, [coupleNames, form.expenses, quickExpenseForm.paid_by]);
+
+  const resolvePaidByLabel = (value: string) => {
+    const normalized = String(value || "").trim();
+    if (!normalized) return "Outro";
+    return paidBySelectOptions.find((option) => option.value === normalized)?.label ?? getLegacyPaidByLabel(normalized, paidBySelectOptions.slice(1));
+  };
+
   const resetTripForm = () => {
     setForm({ ...INITIAL_FORM });
     setEditingTripId(null);
@@ -884,18 +922,37 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
     setErrorMessage(null);
 
     try {
-      if (!user) return;
+      if (!user) {
+        setTrips([]);
+        setMemberDirectory({});
+        setCoupleNames({ name_1: "", name_2: "" });
+        return;
+      }
       const profile = await ensureProfileAndSettings(user.id, user.email);
-      if (!profile?.couple_id) return;
+      if (!profile?.couple_id) {
+        setTrips([]);
+        setMemberDirectory({});
+        setCoupleNames({ name_1: "", name_2: "" });
+        return;
+      }
 
-      const { data: coupleMembers } = await supabase
-        .from("profiles")
-        .select("id,email")
-        .eq("couple_id", profile.couple_id);
+      const [{ data: coupleMembers, error: coupleMembersError }, { data: coupleSettings, error: coupleSettingsError }] =
+        await Promise.all([
+          supabase.from("profiles").select("id,email").eq("couple_id", profile.couple_id),
+          supabase.from("app_settings").select("name_1,name_2").eq("couple_id", profile.couple_id).maybeSingle(),
+        ]);
+
+      if (coupleMembersError) throw coupleMembersError;
+      if (coupleSettingsError) throw coupleSettingsError;
+
       const membersMap = Object.fromEntries(
         (coupleMembers ?? []).map((member) => [member.id as string, String(member.email ?? "").trim() || "parceiro"]),
       );
       setMemberDirectory(membersMap);
+      setCoupleNames({
+        name_1: String(coupleSettings?.name_1 ?? "").trim(),
+        name_2: String(coupleSettings?.name_2 ?? "").trim(),
+      });
 
       const { data, error } = await supabase
         .from("trips")
@@ -1521,10 +1578,10 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
     });
   };
 
-  const addLink = () => {
+  const addLink = (destinationIndex = "general") => {
     setForm((prev) => ({
       ...prev,
-      links: [...prev.links, createBlankLink()],
+      links: [...prev.links, { ...createBlankLink(), destination_index: normalizeDestinationIndex(destinationIndex) }],
     }));
   };
 
@@ -1543,10 +1600,13 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
     });
   };
 
-  const addItineraryItem = () => {
+  const addItineraryItem = (destinationIndex = "general") => {
     setForm((prev) => ({
       ...prev,
-      itinerary: [...prev.itinerary, createBlankItineraryItem()],
+      itinerary: [
+        ...prev.itinerary,
+        { ...createBlankItineraryItem(), destination_index: normalizeDestinationIndex(destinationIndex) },
+      ],
     }));
   };
 
@@ -1577,6 +1637,20 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
       ...prev,
       expenses: prev.expenses.filter((_, i) => i !== index),
     }));
+  };
+
+  const openExpenseProofUpload = (expense: TripExpense, expenseIndex: number) => {
+    if (!editingTripId) {
+      setErrorMessage("Salve a viagem antes de anexar comprovantes.");
+      return;
+    }
+
+    setErrorMessage(null);
+    setAttachmentScopeType("trip");
+    setAttachmentDestinationIndex(normalizeDestinationIndex(expense.destination_index));
+    setAttachmentReferenceIndex(String(expenseIndex + 1));
+    setAttachmentNotes(`Comprovante do gasto ${expenseIndex + 1}`);
+    setActiveTripFormTab("anexos");
   };
 
   const startQuickExpense = (tripId: string) => {
@@ -2212,99 +2286,196 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
               )}
 
               {activeTripFormTab === "roteiro" && (
-              <div>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-                  <div>
-                    <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 block font-bold">
-                      Links da viagem
-                    </label>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Classifique hospedagem, onibus, tours, passagens e documentos.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={addLink}
-                    className="min-h-11 px-3 py-2 rounded-xl bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 text-sm font-medium"
-                  >
-                    Adicionar link
-                  </button>
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] px-4 py-3">
+                  <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 block font-bold">
+                    Storytelling da viagem
+                  </label>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Organize em ordem cronologica: Parada 1, Parada 2, Parada 3... e dentro de cada parada adicione links e roteiro.
+                  </p>
                 </div>
-                <div className="space-y-3">
-                  {form.links.length === 0 && (
-                    <div className="text-sm text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-white/5 rounded-xl px-3 py-3 border border-slate-200 dark:border-white/10">
-                      Nenhum link cadastrado. Ex: hotel em La Paz, empresa de onibus para Uyuni ou passeio no Salar.
+
+                {[
+                  { key: "general", label: "Geral da viagem", description: "Itens que valem para toda a viagem." },
+                  ...form.destinations.map((destination, destinationIndex) => ({
+                    key: String(destinationIndex),
+                    label: `Parada ${destinationIndex + 1}: ${getDestinationDisplayName(destination.name) || "Destino sem nome"}`,
+                    description: "Links e roteiro desta parada.",
+                  })),
+                ].map((section) => {
+                  const linksForSection = form.links
+                    .map((link, linkIndex) => ({ link, linkIndex }))
+                    .filter(({ link }) => normalizeDestinationIndex(link.destination_index) === section.key);
+                  const itineraryForSection = form.itinerary
+                    .map((item, itineraryIndex) => ({ item, itineraryIndex }))
+                    .filter(({ item }) => normalizeDestinationIndex(item.destination_index) === section.key);
+
+                  return (
+                    <div key={`story-${section.key}`} className="rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] p-3 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{section.label}</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">{section.description}</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => addLink(section.key)}
+                            className="min-h-11 px-3 py-2 rounded-xl bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 text-sm font-medium"
+                          >
+                            + Link
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => addItineraryItem(section.key)}
+                            className="min-h-11 px-3 py-2 rounded-xl bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-sm font-medium"
+                          >
+                            + Roteiro
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <p className="text-[10px] uppercase tracking-widest text-blue-600 dark:text-blue-300 font-bold">Links</p>
+                        {linksForSection.length === 0 && (
+                          <div className="text-sm text-slate-500 dark:text-slate-400 bg-white dark:bg-white/5 rounded-xl px-3 py-3 border border-slate-200 dark:border-white/10">
+                            Nenhum link nesta seção.
+                          </div>
+                        )}
+                        {linksForSection.map(({ link, linkIndex }) => (
+                          <div key={`trip-link-${linkIndex}`} className="grid grid-cols-1 lg:grid-cols-[170px_170px_1fr_1fr_auto] gap-2 rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.03] p-3">
+                            <select
+                              value={link.category}
+                              onChange={(e) => updateLink(linkIndex, "category", e.target.value)}
+                              className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-blue-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                            >
+                              {LINK_CATEGORIES.map((category) => (
+                                <option key={category.value} value={category.value}>
+                                  {category.label}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={link.link_status}
+                              onChange={(e) => updateLink(linkIndex, "link_status", e.target.value)}
+                              className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-blue-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                            >
+                              {LINK_STATUS_OPTIONS.map((status) => (
+                                <option key={status.value} value={status.value}>
+                                  {status.label}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              type="text"
+                              value={link.title}
+                              onChange={(e) => updateLink(linkIndex, "title", e.target.value)}
+                              placeholder="Nome (ex: Hotel Sagarnaga)"
+                              className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-blue-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                            />
+                            <input
+                              type="text"
+                              value={link.url}
+                              onChange={(e) => updateLink(linkIndex, "url", e.target.value)}
+                              placeholder="https://..."
+                              className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-blue-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeLink(linkIndex)}
+                              aria-label="Remover link"
+                              className="min-h-11 px-3 rounded-xl bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                            <input
+                              type="text"
+                              value={link.notes}
+                              onChange={(e) => updateLink(linkIndex, "notes", e.target.value)}
+                              placeholder="Observacao opcional (ex: comparar preco, horarios, bagagem...)"
+                              className="lg:col-span-5 min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-blue-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="space-y-2">
+                        <p className="text-[10px] uppercase tracking-widest text-emerald-600 dark:text-emerald-300 font-bold">Roteiro</p>
+                        {itineraryForSection.length === 0 && (
+                          <div className="text-sm text-slate-500 dark:text-slate-400 bg-white dark:bg-white/5 rounded-xl px-3 py-3 border border-slate-200 dark:border-white/10">
+                            Nenhum item de roteiro nesta seção.
+                          </div>
+                        )}
+                        {itineraryForSection.map(({ item, itineraryIndex }) => (
+                          <div key={`itinerary-${itineraryIndex}`} className="rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.03] p-3 space-y-2">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1fr] gap-2">
+                              <input
+                                type="date"
+                                value={item.date}
+                                onChange={(e) => updateItineraryItem(itineraryIndex, "date", e.target.value)}
+                                className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-emerald-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                              />
+                              <input
+                                type="time"
+                                value={item.start_time}
+                                onChange={(e) => updateItineraryItem(itineraryIndex, "start_time", e.target.value)}
+                                className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-emerald-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                              />
+                              <input
+                                type="time"
+                                value={item.end_time}
+                                onChange={(e) => updateItineraryItem(itineraryIndex, "end_time", e.target.value)}
+                                className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-emerald-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                              />
+                              <select
+                                value={item.category}
+                                onChange={(e) => updateItineraryItem(itineraryIndex, "category", e.target.value)}
+                                className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-emerald-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                              >
+                                {ITINERARY_CATEGORIES.map((category) => (
+                                  <option key={category.value} value={category.value}>
+                                    {category.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2">
+                              <input
+                                type="text"
+                                value={item.title}
+                                onChange={(e) => updateItineraryItem(itineraryIndex, "title", e.target.value)}
+                                placeholder="Atividade (ex: city tour em La Paz)"
+                                className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                              />
+                              <input
+                                type="text"
+                                value={item.location}
+                                onChange={(e) => updateItineraryItem(itineraryIndex, "location", e.target.value)}
+                                placeholder="Local (ex: La Paz, terminal de onibus)"
+                                className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeItineraryItem(itineraryIndex)}
+                                aria-label="Remover item do roteiro"
+                                className="min-h-11 px-3 rounded-xl bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                            <textarea
+                              value={item.notes}
+                              onChange={(e) => updateItineraryItem(itineraryIndex, "notes", e.target.value)}
+                              placeholder="Detalhes: horario de chegada, reserva, custo, plano B..."
+                              className="w-full h-20 resize-none bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
+                            />
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  )}
-                  {form.links.map((link, index) => (
-                    <div key={`trip-link-${index}`} className="grid grid-cols-1 lg:grid-cols-[180px_150px_150px_1fr_1fr_auto] gap-2 rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] p-3">
-                      <select
-                        value={link.destination_index}
-                        onChange={(e) => updateLink(index, "destination_index", e.target.value)}
-                        className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-blue-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
-                        aria-label="Parada vinculada ao link"
-                      >
-                        <option value="general">Geral da viagem</option>
-                        {form.destinations.map((destination, destinationIndex) => (
-                          <option key={`link-destination-${destinationIndex}`} value={String(destinationIndex)}>
-                            {getDestinationOptionLabel(form.destinations, String(destinationIndex))}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={link.category}
-                        onChange={(e) => updateLink(index, "category", e.target.value)}
-                        className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-blue-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
-                      >
-                        {LINK_CATEGORIES.map((category) => (
-                          <option key={category.value} value={category.value}>
-                            {category.label}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={link.link_status}
-                        onChange={(e) => updateLink(index, "link_status", e.target.value)}
-                        className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-blue-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
-                      >
-                        {LINK_STATUS_OPTIONS.map((status) => (
-                          <option key={status.value} value={status.value}>
-                            {status.label}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        value={link.title}
-                        onChange={(e) => updateLink(index, "title", e.target.value)}
-                        placeholder="Nome (ex: Hotel Sagarnaga)"
-                        className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-blue-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                      />
-                      <input
-                        type="text"
-                        value={link.url}
-                        onChange={(e) => updateLink(index, "url", e.target.value)}
-                        placeholder="https://..."
-                        className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-blue-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeLink(index)}
-                        aria-label="Remover link"
-                        className="min-h-11 px-3 rounded-xl bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                      <input
-                        type="text"
-                        value={link.notes}
-                        onChange={(e) => updateLink(index, "notes", e.target.value)}
-                        placeholder="Observacao opcional (ex: comparar preco, horarios, bagagem...)"
-                        className="lg:col-span-6 min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-blue-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                      />
-                    </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
               )}
 
@@ -2320,113 +2491,6 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
               </div>
               )}
 
-              {activeTripFormTab === "roteiro" && (
-              <div>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-                  <div>
-                    <label className="text-xs uppercase tracking-widest text-slate-700 dark:text-slate-400 block font-bold">
-                      Roteiro detalhado
-                    </label>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Monte blocos por data e horario, inclusive chegada tarde, manha livre e deslocamentos.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={addItineraryItem}
-                    className="min-h-11 px-3 py-2 rounded-xl bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-sm font-medium"
-                  >
-                    Adicionar roteiro
-                  </button>
-                </div>
-                <div className="space-y-3">
-                  {form.itinerary.length === 0 && (
-                    <div className="text-sm text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-white/5 rounded-xl px-3 py-3 border border-slate-200 dark:border-white/10">
-                      Sem roteiro detalhado ainda. Ex: dia 18 em La Paz, dia 19 ate 21h antes do onibus para Uyuni.
-                    </div>
-                  )}
-                  {form.itinerary.map((item, index) => (
-                    <div key={`itinerary-${index}`} className="rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] p-3 space-y-2">
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[180px_1fr_1fr_1fr_1fr] gap-2">
-                        <select
-                          value={item.destination_index}
-                          onChange={(e) => updateItineraryItem(index, "destination_index", e.target.value)}
-                          className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-emerald-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
-                          aria-label="Parada vinculada ao roteiro"
-                        >
-                          <option value="general">Geral da viagem</option>
-                          {form.destinations.map((destination, destinationIndex) => (
-                            <option key={`itinerary-destination-${destinationIndex}`} value={String(destinationIndex)}>
-                              {getDestinationOptionLabel(form.destinations, String(destinationIndex))}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          type="date"
-                          value={item.date}
-                          onChange={(e) => updateItineraryItem(index, "date", e.target.value)}
-                          className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-emerald-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
-                        />
-                        <input
-                          type="time"
-                          value={item.start_time}
-                          onChange={(e) => updateItineraryItem(index, "start_time", e.target.value)}
-                          className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-emerald-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
-                        />
-                        <input
-                          type="time"
-                          value={item.end_time}
-                          onChange={(e) => updateItineraryItem(index, "end_time", e.target.value)}
-                          className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-emerald-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
-                        />
-                        <select
-                          value={item.category}
-                          onChange={(e) => updateItineraryItem(index, "category", e.target.value)}
-                          className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-emerald-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
-                        >
-                          {ITINERARY_CATEGORIES.map((category) => (
-                            <option key={category.value} value={category.value}>
-                              {category.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2">
-                        <input
-                          type="text"
-                          value={item.title}
-                          onChange={(e) => updateItineraryItem(index, "title", e.target.value)}
-                          placeholder="Atividade (ex: city tour em La Paz)"
-                          className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                        />
-                        <input
-                          type="text"
-                          value={item.location}
-                          onChange={(e) => updateItineraryItem(index, "location", e.target.value)}
-                          placeholder="Local (ex: La Paz, terminal de onibus)"
-                          className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeItineraryItem(index)}
-                          aria-label="Remover item do roteiro"
-                          className="min-h-11 px-3 rounded-xl bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <textarea
-                        value={item.notes}
-                        onChange={(e) => updateItineraryItem(index, "notes", e.target.value)}
-                        placeholder="Detalhes: horario de chegada, reserva, custo, plano B..."
-                        className="w-full h-20 resize-none bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 outline-none focus:border-emerald-500/50 transition-colors text-slate-900 dark:text-slate-100"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-              )}
-
               {activeTripFormTab === "financeiro" && (
               <div>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
@@ -2435,7 +2499,7 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
                       Gastos reais
                     </label>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Registre gastos efetivos por parada para comparar planejado vs realizado.
+                      Registre gastos efetivos por parada para comparar planejado vs realizado. Use o campo "Quem pagou" para identificar o responsável.
                     </p>
                   </div>
                   <button
@@ -2447,6 +2511,12 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
                   </button>
                 </div>
                 <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[180px_160px_1fr_auto] gap-2 px-1">
+                    <span className="text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 font-bold">Parada</span>
+                    <span className="text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 font-bold">Categoria</span>
+                    <span className="text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 font-bold">Valor</span>
+                    <span />
+                  </div>
                   {form.expenses.length === 0 && (
                     <div className="text-sm text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-white/5 rounded-xl px-3 py-3 border border-slate-200 dark:border-white/10">
                       Nenhum gasto real registrado ainda.
@@ -2454,7 +2524,7 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
                   )}
                   {form.expenses.map((expense, index) => (
                     <div key={`expense-${index}`} className="rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] p-3 space-y-2">
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[180px_140px_140px_1fr_auto] gap-2">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[180px_160px_1fr_auto] gap-2">
                         <select
                           value={expense.destination_index}
                           onChange={(e) => updateExpenseItem(index, "destination_index", e.target.value)}
@@ -2475,17 +2545,6 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
                           {EXPENSE_CATEGORIES.map((category) => (
                             <option key={category.value} value={category.value}>
                               {category.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={expense.paid_by}
-                          onChange={(e) => updateExpenseItem(index, "paid_by", e.target.value)}
-                          className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-amber-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
-                        >
-                          {PAID_BY_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
                             </option>
                           ))}
                         </select>
@@ -2516,9 +2575,29 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
                           type="text"
                           value={expense.notes}
                           onChange={(e) => updateExpenseItem(index, "notes", e.target.value)}
-                          placeholder="Observacao do gasto"
+                          placeholder="Observacao do gasto (nao use para indicar quem pagou)"
                           className="min-h-11 w-full bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:border-amber-500/50 transition-colors text-slate-900 dark:text-slate-100"
                         />
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-2">
+                        <select
+                          value={expense.paid_by}
+                          onChange={(e) => updateExpenseItem(index, "paid_by", e.target.value)}
+                          className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-amber-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
+                        >
+                          {paidBySelectOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => openExpenseProofUpload(expense, index)}
+                          className="min-h-11 w-full px-3 rounded-xl bg-cyan-100 dark:bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 text-sm font-medium"
+                        >
+                          Comprovante
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -3042,7 +3121,7 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
                               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                 {paidByBreakdown.map((item) => (
                                   <div key={`${trip.id}-paid-${item.value}`} className="rounded-xl bg-white/80 dark:bg-white/[0.05] border border-slate-200 dark:border-white/10 p-3">
-                                    <span className="text-xs text-slate-500 dark:text-slate-400">{getCategoryLabel(PAID_BY_OPTIONS, item.value)}</span>
+                                    <span className="text-xs text-slate-500 dark:text-slate-400">{resolvePaidByLabel(item.value)}</span>
                                     <strong className="block text-sm text-slate-800 dark:text-white mt-1">{formatCurrencyValue(item.amount)}</strong>
                                   </div>
                                 ))}
@@ -3081,7 +3160,7 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
                                   onChange={(e) => updateQuickExpense("paid_by", e.target.value)}
                                   className="min-h-11 w-full bg-white dark:bg-[#1a1d24] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 outline-none focus:border-amber-500/50 transition-colors text-sm text-slate-900 dark:text-slate-100"
                                 >
-                                  {PAID_BY_OPTIONS.map((option) => (
+                                  {paidBySelectOptions.map((option) => (
                                     <option key={option.value} value={option.value}>
                                       {option.label}
                                     </option>

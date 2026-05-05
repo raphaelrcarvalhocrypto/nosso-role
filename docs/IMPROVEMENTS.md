@@ -33,10 +33,17 @@ Consolidar o SaaS para casal com foco em:
 - [x] Dates com modal grande, autocomplete de endereco e horario de entrada/saida.
 - [x] Dates exibem marcador no mapa a partir do endereco salvo.
 - [x] Trips com planejamento modular por parada (links categorizados e roteiro por destino/data).
+- [x] Trips com pagina dedicada de detalhes por viagem em vez de modal de edicao.
+- [x] Trips com storytelling cronologico por parada, separando links e roteiro em sequencia.
+- [x] Trips com plano financeiro mais claro, mostrando quem pagou por membro do casal.
+- [x] Trips com select de pagamento usando os nomes reais do casal e comprovante ao lado do gasto.
+- [x] Trips com comprovante/anexo contextual para gasto real.
 - [x] Trips com anexos por escopo (viagem/parada/link/roteiro) e visualizacao segura via URL assinada.
 - [x] Trips com orcamento separado em casal + individual por pessoa.
 - [x] Trips com resumo de gastos vs. orcamento, breakdown por categoria e gasto inline.
 - [x] Trips com notificacoes locais para alertas enquanto o app esta aberto.
+- [x] Trips com logout visivel no mobile e menu inferior responsivo.
+- [x] Auth OAuth com redirecionamento mais confiavel em mobile.
 - [x] Trips com status controlado por enum no Supabase.
 - [x] Links de viagem dentro de roteiro com status de decisao (analisando, confirmado, nao fechado).
 - [ ] Revisar UX de auth para evitar redirects redundantes.
