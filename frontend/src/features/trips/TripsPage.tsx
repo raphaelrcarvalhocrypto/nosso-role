@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { handleDatabaseError, OperationType, supabase } from "@/services/supabase/client";
 import { ensureProfileAndSettings } from "@/services/supabase/data";
 import { useAuthStore } from "@/stores/authStore";
@@ -836,7 +838,13 @@ async function geocodeDestination(
   }
 }
 
-export default function TripsPage() {
+type TripsPageProps = {
+  focusTripId?: string;
+};
+
+export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
+  const router = useRouter();
+  const isDetailsMode = Boolean(focusTripId);
   const { user } = useAuthStore();
   const [trips, setTrips] = useState<TripRecord[]>([]);
   const [memberDirectory, setMemberDirectory] = useState<Record<string, string>>({});
@@ -1333,9 +1341,15 @@ export default function TripsPage() {
         if (insertAlertsError) throw insertAlertsError;
       }
 
-      setShowForm(false);
-      resetTripForm();
-      await fetchTrips();
+      if (isDetailsMode) {
+        setEditingTripId(tripId);
+        setSelectedTripId(tripId);
+        await fetchTrips();
+      } else {
+        setShowForm(false);
+        resetTripForm();
+        await fetchTrips();
+      }
     } catch (error) {
       const message = handleDatabaseError(
         error,
@@ -1395,6 +1409,14 @@ export default function TripsPage() {
     setShowForm(true);
   };
 
+  useEffect(() => {
+    if (!focusTripId || loading) return;
+    const focusTrip = trips.find((trip) => trip.id === focusTripId);
+    if (!focusTrip) return;
+    if (editingTripId === focusTripId && showForm) return;
+    handleEditTrip(focusTrip);
+  }, [focusTripId, loading, trips, editingTripId, showForm]);
+
   const handleDeleteTrip = async (tripId: string) => {
     if (!user) return;
     if (!window.confirm("Deseja excluir esta viagem?")) return;
@@ -1404,6 +1426,10 @@ export default function TripsPage() {
       const { error } = await supabase.from("trips").delete().eq("id", tripId);
       if (error) throw error;
       if (selectedTripId === tripId) setSelectedTripId(null);
+      if (focusTripId === tripId) {
+        router.push("/trips");
+        return;
+      }
       await fetchTrips();
     } catch (error) {
       const message = handleDatabaseError(error, OperationType.DELETE, "trips", user);
@@ -1856,6 +1882,12 @@ export default function TripsPage() {
     () => (editingTripId ? trips.find((trip) => trip.id === editingTripId) ?? null : null),
     [editingTripId, trips],
   );
+  const focusedTripRecord = useMemo(
+    () => (focusTripId ? trips.find((trip) => trip.id === focusTripId) ?? null : null),
+    [focusTripId, trips],
+  );
+  const focusedTripMissing = Boolean(isDetailsMode && !loading && !focusedTripRecord);
+  const isFormVisible = isDetailsMode ? Boolean(editingTripId) : showForm;
 
   const containerVariants: any = {
     hidden: { opacity: 0 },
@@ -1875,22 +1907,41 @@ export default function TripsPage() {
       <motion.header variants={childVariants} className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-4xl font-serif mb-2 text-slate-900 dark:text-white">
-            Nossas <span className="text-rose-500 italic">Viagens</span>
+            {isDetailsMode ? (
+              <>
+                Detalhes da <span className="text-rose-500 italic">Viagem</span>
+              </>
+            ) : (
+              <>
+                Nossas <span className="text-rose-500 italic">Viagens</span>
+              </>
+            )}
           </h2>
-          <p className="text-slate-500 dark:text-slate-400">Planeje cada etapa da rota do casal.</p>
+          <p className="text-slate-500 dark:text-slate-400">
+            {isDetailsMode ? "Gerencie a viagem em uma página dedicada." : "Planeje cada etapa da rota do casal."}
+          </p>
         </div>
-        <button
-          onClick={() => {
-            const next = !showForm;
-            setShowForm(next);
-            if (!next) resetTripForm();
-            if (next && !editingTripId) setActiveTripFormTab("paradas");
-          }}
-          className="flex items-center gap-2 bg-rose-500 hover:bg-rose-400 text-white px-6 py-3 rounded-2xl font-medium transition-all active:scale-95 shadow-lg shadow-rose-500/20"
-        >
-          <Plus className="w-5 h-5" />
-          {editingTripId ? "Detalhes da Viagem" : "Nova Viagem"}
-        </button>
+        {isDetailsMode ? (
+          <Link
+            href="/trips"
+            className="inline-flex items-center gap-2 bg-slate-200 hover:bg-slate-300 dark:bg-white/10 dark:hover:bg-white/20 text-slate-800 dark:text-slate-100 px-6 py-3 rounded-2xl font-medium transition-all active:scale-95"
+          >
+            Voltar para viagens
+          </Link>
+        ) : (
+          <button
+            onClick={() => {
+              const next = !showForm;
+              setShowForm(next);
+              if (!next) resetTripForm();
+              if (next && !editingTripId) setActiveTripFormTab("paradas");
+            }}
+            className="flex items-center gap-2 bg-rose-500 hover:bg-rose-400 text-white px-6 py-3 rounded-2xl font-medium transition-all active:scale-95 shadow-lg shadow-rose-500/20"
+          >
+            <Plus className="w-5 h-5" />
+            {editingTripId ? "Detalhes da Viagem" : "Nova Viagem"}
+          </button>
+        )}
       </motion.header>
 
       {errorMessage && (
@@ -1902,8 +1953,21 @@ export default function TripsPage() {
         </motion.div>
       )}
 
+      {focusedTripMissing && (
+        <motion.div
+          variants={childVariants}
+          className="rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300"
+        >
+          Viagem não encontrada.{" "}
+          <Link href="/trips" className="underline font-medium">
+            Voltar para a lista
+          </Link>
+          .
+        </motion.div>
+      )}
+
       <AnimatePresence>
-        {showForm && (
+        {isFormVisible && (
           <motion.div
             initial={{ opacity: 0, y: -12, height: 0 }}
             animate={{ opacity: 1, y: 0, height: "auto" }}
@@ -2734,7 +2798,8 @@ export default function TripsPage() {
         )}
       </AnimatePresence>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+      {!isDetailsMode && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         <motion.div variants={childVariants} className="lg:col-span-2 space-y-4">
           {loading && (
             <motion.div variants={childVariants} className="glass p-12 rounded-2xl text-center border border-slate-200/50 dark:border-white/5">
@@ -3214,13 +3279,12 @@ export default function TripsPage() {
                       >
                         Ver rota
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleEditTrip(trip)}
+                      <Link
+                        href={`/trips/${trip.id}`}
                         className="text-xs px-2 py-1 rounded-lg bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-200"
                       >
                         Editar
-                      </button>
+                      </Link>
                       <button
                         type="button"
                         onClick={() => handleDeleteTrip(trip.id)}
@@ -3251,7 +3315,8 @@ export default function TripsPage() {
             Clique em "Ver rota" em uma viagem para destacar a rota principal no mapa.
           </div>
         </motion.aside>
-      </div>
+        </div>
+      )}
     </motion.div>
   );
 }
