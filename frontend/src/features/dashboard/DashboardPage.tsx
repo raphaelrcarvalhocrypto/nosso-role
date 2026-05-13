@@ -107,7 +107,7 @@ export default function Dashboard() {
                 .from('trips')
                 .select('*', { count: 'exact', head: true })
                 .eq('couple_id', userProfile.couple_id)
-                .in('status', ['concluida', 'concluída']),
+                .in('status', ['concluida']),
               supabase
                 .from('wishlist_items')
                 .select('*', { count: 'exact', head: true })
@@ -623,3 +623,4 @@ function formatDelta(value: number) {
   if (value < 0) return `${value} vs semana anterior`;
   return '0 vs semana anterior';
 }
+

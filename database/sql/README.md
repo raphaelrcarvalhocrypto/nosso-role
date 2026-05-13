@@ -22,6 +22,7 @@ Scripts atuais:
 - `017_trip_attachments_security_hardening.sql`
 - `018_trips_status_enum.sql`
 - `019_trip_links_status.sql`
+- `020_trip_attachments_storage_insert_policy_fix.sql`
 
 Resumo das migrations de viagens (fase atual):
 - `014_trip_planning_normalization.sql`
@@ -42,10 +43,13 @@ Resumo das migrations de viagens (fase atual):
 - `019_trip_links_status.sql`
   - Adiciona `trip_links.link_status` com default `analisando`.
   - Restringe status para `analisando`, `confirmado` ou `descartado`.
+- `020_trip_attachments_storage_insert_policy_fix.sql`
+  - Ajusta a policy de `insert` no bucket `trip-attachments`.
+  - Remove validacoes por `metadata` no RLS de storage para evitar falso negativo no upload.
 
-Status desta rodada (2026-05-04):
+Status desta rodada (2026-05-13):
 - `014`, `015`, `016`, `017` e `018` executadas.
-- `019` pendente de execucao.
+- `019` e `020` pendentes de execucao.
 
 Padrao recomendado:
 

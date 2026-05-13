@@ -1770,7 +1770,11 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
           cacheControl: "3600",
           contentType: mimeType,
         });
-      if (uploadError) throw uploadError;
+      if (uploadError) {
+        const message = handleDatabaseError(uploadError, OperationType.CREATE, "storage.objects", user);
+        setErrorMessage(`Falha no upload do arquivo: ${message}`);
+        return;
+      }
 
       const referenceIndexValue = attachmentReferenceIndex ? Number(attachmentReferenceIndex) : null;
       const payload = {
@@ -1787,6 +1791,7 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
         mime_type: mimeType,
         size_bytes: file.size,
         notes: attachmentNotes.trim() || null,
+        created_by: user.id,
       };
 
       const { error: insertError } = await supabase.from("trip_attachments").insert(payload);
