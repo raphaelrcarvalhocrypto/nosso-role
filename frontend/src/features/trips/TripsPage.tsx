@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { handleDatabaseError, OperationType, supabase } from "@/services/supabase/client";
@@ -359,6 +359,16 @@ function resolveAttachmentMimeType(file: File, extension: string): string | null
   const normalizedMime = ATTACHMENT_MIME_ALIASES[rawMime] ?? rawMime;
   if (ATTACHMENT_ALLOWED_MIME_TYPES.has(normalizedMime)) return normalizedMime;
   return ATTACHMENT_MIME_MAP_BY_EXTENSION[extension] ?? null;
+}
+
+function isImageAttachment(attachment: TripAttachment) {
+  if (attachment.mime_type?.startsWith("image/")) return true;
+  const extension = attachment.file_name.split(".").pop()?.toLowerCase() ?? "";
+  return ["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif", "svg"].includes(extension);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function calculateTotalBudget(coupleBudget: number, individualBudgetPerPerson: number) {
@@ -863,6 +873,13 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
   const [attachmentDestinationIndex, setAttachmentDestinationIndex] = useState("general");
   const [attachmentReferenceIndex, setAttachmentReferenceIndex] = useState("");
   const [attachmentNotes, setAttachmentNotes] = useState("");
+  const [attachmentPreviewUrls, setAttachmentPreviewUrls] = useState<Record<string, string>>({});
+  const [activeAttachmentPreview, setActiveAttachmentPreview] = useState<{ url: string; name: string } | null>(null);
+  const [attachmentPreviewZoom, setAttachmentPreviewZoom] = useState(1);
+  const [attachmentPreviewOffset, setAttachmentPreviewOffset] = useState({ x: 0, y: 0 });
+  const [attachmentPreviewDragging, setAttachmentPreviewDragging] = useState(false);
+  const dragPointRef = useRef<{ x: number; y: number } | null>(null);
+  const pinchDistanceRef = useRef<number | null>(null);
   const [quickExpenseTripId, setQuickExpenseTripId] = useState<string | null>(null);
   const [quickExpenseForm, setQuickExpenseForm] = useState<TripExpense>({
     ...createBlankExpense(),
@@ -1852,6 +1869,141 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
     }
   };
 
+  const openAttachmentPreviewModal = (url: string, name: string) => {
+    setAttachmentPreviewZoom(1);
+    setAttachmentPreviewOffset({ x: 0, y: 0 });
+    setAttachmentPreviewDragging(false);
+    dragPointRef.current = null;
+    pinchDistanceRef.current = null;
+    setActiveAttachmentPreview({ url, name });
+  };
+
+  const closeAttachmentPreviewModal = () => {
+    setActiveAttachmentPreview(null);
+    setAttachmentPreviewDragging(false);
+    dragPointRef.current = null;
+    pinchDistanceRef.current = null;
+  };
+
+  const handleOpenAttachmentPreview = async (attachment: TripAttachment) => {
+    if (!user) return;
+
+    const cachedUrl = attachmentPreviewUrls[attachment.file_path];
+    if (cachedUrl) {
+      openAttachmentPreviewModal(cachedUrl, attachment.file_name);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase.storage
+        .from("trip-attachments")
+        .createSignedUrl(attachment.file_path, 60 * 30);
+      if (error) throw error;
+      if (!data?.signedUrl) return;
+
+      setAttachmentPreviewUrls((prev) => ({ ...prev, [attachment.file_path]: data.signedUrl }));
+      openAttachmentPreviewModal(data.signedUrl, attachment.file_name);
+    } catch (error) {
+      const message = handleDatabaseError(error, OperationType.GET, "storage.objects", user);
+      setErrorMessage(message);
+    }
+  };
+
+  const changeAttachmentPreviewZoom = (nextZoom: number) => {
+    const safeZoom = clamp(nextZoom, 1, 4);
+    setAttachmentPreviewZoom(safeZoom);
+    if (safeZoom === 1) {
+      setAttachmentPreviewOffset({ x: 0, y: 0 });
+    }
+  };
+
+  const handleAttachmentPreviewWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const delta = event.deltaY < 0 ? 0.2 : -0.2;
+    changeAttachmentPreviewZoom(Number((attachmentPreviewZoom + delta).toFixed(2)));
+  };
+
+  const handleAttachmentPreviewMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (attachmentPreviewZoom <= 1) return;
+    dragPointRef.current = { x: event.clientX, y: event.clientY };
+    setAttachmentPreviewDragging(true);
+  };
+
+  const handleAttachmentPreviewMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!attachmentPreviewDragging || !dragPointRef.current || attachmentPreviewZoom <= 1) return;
+    const deltaX = event.clientX - dragPointRef.current.x;
+    const deltaY = event.clientY - dragPointRef.current.y;
+    dragPointRef.current = { x: event.clientX, y: event.clientY };
+    setAttachmentPreviewOffset((prev) => ({ x: prev.x + deltaX, y: prev.y + deltaY }));
+  };
+
+  const stopAttachmentPreviewDrag = () => {
+    setAttachmentPreviewDragging(false);
+    dragPointRef.current = null;
+  };
+
+  const getTouchDistance = (touches: React.TouchList) => {
+    const [first, second] = [touches[0], touches[1]];
+    const deltaX = first.clientX - second.clientX;
+    const deltaY = first.clientY - second.clientY;
+    return Math.hypot(deltaX, deltaY);
+  };
+
+  const handleAttachmentPreviewTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length === 2) {
+      pinchDistanceRef.current = getTouchDistance(event.touches);
+      setAttachmentPreviewDragging(false);
+      dragPointRef.current = null;
+      return;
+    }
+
+    if (event.touches.length === 1 && attachmentPreviewZoom > 1) {
+      const touch = event.touches[0];
+      dragPointRef.current = { x: touch.clientX, y: touch.clientY };
+      setAttachmentPreviewDragging(true);
+    }
+  };
+
+  const handleAttachmentPreviewTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length === 2) {
+      event.preventDefault();
+      const nextDistance = getTouchDistance(event.touches);
+      const previousDistance = pinchDistanceRef.current;
+      if (previousDistance && previousDistance > 0) {
+        const ratio = nextDistance / previousDistance;
+        changeAttachmentPreviewZoom(Number((attachmentPreviewZoom * ratio).toFixed(2)));
+      }
+      pinchDistanceRef.current = nextDistance;
+      return;
+    }
+
+    if (event.touches.length === 1 && attachmentPreviewDragging && dragPointRef.current && attachmentPreviewZoom > 1) {
+      event.preventDefault();
+      const touch = event.touches[0];
+      const deltaX = touch.clientX - dragPointRef.current.x;
+      const deltaY = touch.clientY - dragPointRef.current.y;
+      dragPointRef.current = { x: touch.clientX, y: touch.clientY };
+      setAttachmentPreviewOffset((prev) => ({ x: prev.x + deltaX, y: prev.y + deltaY }));
+    }
+  };
+
+  const handleAttachmentPreviewTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length < 2) {
+      pinchDistanceRef.current = null;
+    }
+    if (event.touches.length === 0) {
+      stopAttachmentPreviewDrag();
+    }
+  };
+
+  const handleAttachmentPreviewDoubleClick = () => {
+    if (attachmentPreviewZoom > 1) {
+      changeAttachmentPreviewZoom(1);
+      return;
+    }
+    changeAttachmentPreviewZoom(2);
+  };
+
   const getAuthorLabel = (authorId?: string | null) => {
     if (!authorId) return "autor desconhecido";
     if (authorId === user?.id) return "voce";
@@ -1872,6 +2024,21 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
     if (typeof window === "undefined" || !("Notification" in window)) return;
     setNotificationPermission(Notification.permission);
   }, []);
+
+  useEffect(() => {
+    if (!activeAttachmentPreview) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeAttachmentPreviewModal();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [activeAttachmentPreview]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("Notification" in window)) return;
@@ -1967,6 +2134,46 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
   );
   const focusedTripMissing = Boolean(isDetailsMode && !loading && !focusedTripRecord);
   const isFormVisible = isDetailsMode ? Boolean(editingTripId) : showForm;
+
+  useEffect(() => {
+    let active = true;
+
+    const loadAttachmentPreviews = async () => {
+      const attachments = editingTripRecord?.normalized_attachments ?? [];
+      const imageAttachments = attachments.filter(isImageAttachment);
+
+      if (imageAttachments.length === 0) {
+        setAttachmentPreviewUrls({});
+        return;
+      }
+
+      const results = await Promise.all(
+        imageAttachments.map(async (attachment) => {
+          const { data, error } = await supabase.storage
+            .from("trip-attachments")
+            .createSignedUrl(attachment.file_path, 60 * 30);
+          if (error || !data?.signedUrl) return null;
+          return [attachment.file_path, data.signedUrl] as const;
+        }),
+      );
+
+      if (!active) return;
+
+      setAttachmentPreviewUrls(() => {
+        const next: Record<string, string> = {};
+        results.forEach((entry) => {
+          if (!entry) return;
+          next[entry[0]] = entry[1];
+        });
+        return next;
+      });
+    };
+
+    loadAttachmentPreviews();
+    return () => {
+      active = false;
+    };
+  }, [editingTripRecord]);
 
   const containerVariants: any = {
     hidden: { opacity: 0 },
@@ -2777,6 +2984,14 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
                       {(editingTripRecord?.normalized_attachments ?? []).map((attachment, index) => (
                         <div key={`attachment-${index}`} className="rounded-xl border border-slate-200 dark:border-white/10 bg-white/70 dark:bg-white/[0.03] p-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
                           <div className="min-w-0">
+                            {isImageAttachment(attachment) && attachmentPreviewUrls[attachment.file_path] && (
+                              <img
+                                src={attachmentPreviewUrls[attachment.file_path]}
+                                alt={attachment.file_name}
+                                onClick={() => handleOpenAttachmentPreview(attachment)}
+                                className="mb-2 h-14 w-14 rounded-lg object-cover border border-slate-200 dark:border-white/10 cursor-zoom-in"
+                              />
+                            )}
                             <p className="font-medium text-slate-800 dark:text-slate-100 truncate">{attachment.file_name}</p>
                             <p className="text-xs text-slate-500 dark:text-slate-400">
                               {attachment.scope_type} · {attachment.destination_index === "general" ? "geral" : `parada ${Number(attachment.destination_index) + 1}`}
@@ -3399,6 +3614,78 @@ export default function TripsPage({ focusTripId }: TripsPageProps = {}) {
             Clique em "Ver rota" em uma viagem para destacar a rota principal no mapa.
           </div>
         </motion.aside>
+        </div>
+      )}
+
+      {activeAttachmentPreview && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={closeAttachmentPreviewModal}
+        >
+          <div
+            className="w-full max-w-4xl rounded-2xl border border-slate-200/20 bg-slate-950 p-3"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 px-2 py-1 mb-2">
+              <p className="text-xs sm:text-sm text-slate-200 truncate">{activeAttachmentPreview.name}</p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => changeAttachmentPreviewZoom(attachmentPreviewZoom - 0.2)}
+                  className="text-xs px-2 py-1 rounded-lg bg-slate-200/20 text-slate-100 hover:bg-slate-200/30"
+                >
+                  -
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeAttachmentPreviewZoom(1)}
+                  className="text-xs px-2 py-1 rounded-lg bg-slate-200/20 text-slate-100 hover:bg-slate-200/30 min-w-12"
+                >
+                  {Math.round(attachmentPreviewZoom * 100)}%
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeAttachmentPreviewZoom(attachmentPreviewZoom + 0.2)}
+                  className="text-xs px-2 py-1 rounded-lg bg-slate-200/20 text-slate-100 hover:bg-slate-200/30"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  onClick={closeAttachmentPreviewModal}
+                  className="text-xs px-2 py-1 rounded-lg bg-slate-200/20 text-slate-100 hover:bg-slate-200/30"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+            <div
+              className="w-full max-h-[80vh] overflow-hidden rounded-xl touch-none"
+              onWheel={handleAttachmentPreviewWheel}
+              onMouseDown={handleAttachmentPreviewMouseDown}
+              onMouseMove={handleAttachmentPreviewMouseMove}
+              onMouseUp={stopAttachmentPreviewDrag}
+              onMouseLeave={stopAttachmentPreviewDrag}
+              onTouchStart={handleAttachmentPreviewTouchStart}
+              onTouchMove={handleAttachmentPreviewTouchMove}
+              onTouchEnd={handleAttachmentPreviewTouchEnd}
+              onTouchCancel={handleAttachmentPreviewTouchEnd}
+              onDoubleClick={handleAttachmentPreviewDoubleClick}
+              style={{ cursor: attachmentPreviewZoom > 1 ? (attachmentPreviewDragging ? "grabbing" : "grab") : "zoom-in" }}
+            >
+              <img
+                src={activeAttachmentPreview.url}
+                alt={activeAttachmentPreview.name}
+                draggable={false}
+                className="w-full max-h-[80vh] object-contain rounded-xl select-none"
+                style={{
+                  transform: `translate(${attachmentPreviewOffset.x}px, ${attachmentPreviewOffset.y}px) scale(${attachmentPreviewZoom})`,
+                  transformOrigin: "center center",
+                  transition: attachmentPreviewDragging ? "none" : "transform 120ms ease-out",
+                }}
+              />
+            </div>
+          </div>
         </div>
       )}
     </motion.div>
